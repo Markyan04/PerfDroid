@@ -1,0 +1,16 @@
+[workspace]
+members = [
+  "crates/pd-core",
+  "crates/pd-registry",
+  "crates/pd-sampler",
+  "crates/profiler-cpu",
+  "crates/profiler-memory",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+

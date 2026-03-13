@@ -1,0 +1,7 @@
+[package]
+name = "pd-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
