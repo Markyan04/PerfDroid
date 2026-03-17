@@ -1,0 +1,7 @@
+[package]
+name = "profiler-fps"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pdcore = { path = "../../pdcore" }

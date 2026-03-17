@@ -1,10 +1,13 @@
 [workspace]
 members = [
-  "crates/pd-core",
-  "crates/pd-registry",
-  "crates/pd-sampler",
-  "crates/profiler-cpu",
-  "crates/profiler-memory",
+  "crates/pdcore",
+  "crates/registry",
+  "crates/app",
+  "crates/profiler/cpu_clock",
+  "crates/profiler/cpu_usage",
+  "crates/profiler/fps",
+  "crates/profiler/power",
+  "crates/profiler/temperature",
 ]
 resolver = "2"
 
@@ -13,4 +16,3 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
-

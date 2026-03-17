@@ -1,0 +1,7 @@
+[package]
+name = "profiler-cpu-clock"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pdcore = { path = "../../pdcore" }
