@@ -2,6 +2,9 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::constants::INVALID_METRIC_VALUE;
 
+/// Duplicate of [`crate::traits::AtomicMetric`].
+/// Design a struct and implement [`crate::traits::AtomicMetric`] instead.
+#[deprecated(note = "Duplicate of crate::traits::AtomicMetric; implement that instead")]
 #[derive(Debug)]
 pub struct AtomicMetricValue {
     inner: AtomicI64,

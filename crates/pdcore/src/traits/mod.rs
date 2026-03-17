@@ -15,6 +15,11 @@ pub trait Profiler: Send + Sync {
     fn collectors(&self) -> &[Self::CollectorType];
 }
 
+pub trait AtomicMetric: Send + Sync {
+    fn mark_missing(&self, ordering: Ordering);
+    fn is_missing(&self, ordering: Ordering) -> bool;
+}
+
 pub trait DataPlane {
     fn build_metric_batch(&self) -> Result<MetricBatch, CoreError>;
 }
