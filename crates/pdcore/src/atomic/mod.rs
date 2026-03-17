@@ -2,8 +2,10 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::constants::INVALID_METRIC_VALUE;
 
-/// Duplicate of [`crate::traits::AtomicMetric`].
-/// Design a struct and implement [`crate::traits::AtomicMetric`] instead.
+/// Compatibility wrapper around atomic metric storage.
+///
+/// New implementations should prefer implementing [`crate::traits::AtomicMetric`]
+/// on their own concrete type.
 #[deprecated(note = "Duplicate of crate::traits::AtomicMetric; implement that instead")]
 #[derive(Debug)]
 pub struct AtomicMetricValue {
@@ -11,34 +13,41 @@ pub struct AtomicMetricValue {
 }
 
 impl AtomicMetricValue {
+    /// Creates a new atomic value with an initial metric value.
     pub const fn new(initial: i64) -> Self {
         Self {
             inner: AtomicI64::new(initial),
         }
     }
 
+    /// Loads current metric value using the provided memory ordering.
     pub fn load(&self, ordering: Ordering) -> i64 {
         self.inner.load(ordering)
     }
 
+    /// Stores metric value using the provided memory ordering.
     pub fn store(&self, value: i64, ordering: Ordering) {
         self.inner.store(value, ordering);
     }
 
+    /// Swaps metric value and returns the previous one.
     pub fn swap(&self, value: i64, ordering: Ordering) -> i64 {
         self.inner.swap(value, ordering)
     }
 
+    /// Marks this metric as missing.
     pub fn mark_missing(&self, ordering: Ordering) {
         self.store(INVALID_METRIC_VALUE, ordering);
     }
 
+    /// Returns true if current value is the missing sentinel.
     pub fn is_missing(&self, ordering: Ordering) -> bool {
         self.load(ordering) == INVALID_METRIC_VALUE
     }
 }
 
 impl Default for AtomicMetricValue {
+    /// Creates a metric initialized to [`INVALID_METRIC_VALUE`].
     fn default() -> Self {
         Self::new(INVALID_METRIC_VALUE)
     }

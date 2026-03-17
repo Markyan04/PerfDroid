@@ -3,14 +3,19 @@ use std::str::FromStr;
 use crate::errors::CoreError;
 use crate::utils::{normalize_metric_values, validate_collectors, validate_non_empty};
 
+/// Metadata describing one collector entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CollectorMetadata {
+    /// Collector identity key.
     pub collector_key: String,
+    /// Measurement unit used by this collector.
     pub unit: String,
+    /// Explicit ordering index for deterministic collector ordering.
     pub order: usize,
 }
 
 impl CollectorMetadata {
+    /// Creates validated [`CollectorMetadata`].
     pub fn new(
         collector_key: impl Into<String>,
         unit: impl Into<String>,
@@ -30,13 +35,17 @@ impl CollectorMetadata {
     }
 }
 
+/// Metadata describing one profiler and its collectors.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfilerMetadata {
+    /// Profiler identity key.
     pub profiler_key: String,
+    /// Collector metadata list.
     pub collector: Vec<CollectorMetadata>,
 }
 
 impl ProfilerMetadata {
+    /// Creates validated [`ProfilerMetadata`].
     pub fn new(
         profiler_key: impl Into<String>,
         collector: Vec<CollectorMetadata>,
@@ -51,6 +60,7 @@ impl ProfilerMetadata {
         })
     }
 
+    /// Returns collectors sorted by [`CollectorMetadata::order`].
     pub fn ordered_collectors(&self) -> Vec<&CollectorMetadata> {
         let mut collectors = self.collector.iter().collect::<Vec<_>>();
         collectors.sort_by_key(|collector| collector.order);
@@ -58,14 +68,19 @@ impl ProfilerMetadata {
     }
 }
 
+/// Normalized metric payload for the data plane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetricBatch {
+    /// Metric identity key (for example: `CPU_CLOCK`, `FPS`).
     pub metric_key: String,
+    /// Metric unit string.
     pub unit: String,
+    /// Fixed-width values vector.
     pub values: Vec<i64>,
 }
 
 impl MetricBatch {
+    /// Creates a metric batch and normalizes values to fixed capacity.
     pub fn new(
         metric_key: impl Into<String>,
         unit: impl Into<String>,
@@ -85,16 +100,23 @@ impl MetricBatch {
     }
 }
 
+/// Aggregation-layer control commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlCommand {
+    /// Initialize connectivity and profiler runtime.
     Connect,
+    /// Start sampling.
     Start,
+    /// Pause sampling while keeping runtime alive.
     Pause,
+    /// Restart sampling after pause.
     Restart,
+    /// Stop sampling and release runtime resources.
     Stop,
 }
 
 impl ControlCommand {
+    /// Ordered list of all supported commands.
     pub const ALL: [Self; 5] = [
         Self::Connect,
         Self::Start,
@@ -103,6 +125,7 @@ impl ControlCommand {
         Self::Stop,
     ];
 
+    /// Returns lowercase command key.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Connect => "connect",
@@ -117,6 +140,7 @@ impl ControlCommand {
 impl FromStr for ControlCommand {
     type Err = CoreError;
 
+    /// Parses a control command from a case-insensitive string.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_ascii_lowercase().as_str() {
             "connect" => Ok(Self::Connect),

@@ -1,13 +1,31 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+/// Errors returned by `pdcore` constructors and validators.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreError {
+    /// A required field is empty or only whitespace.
     EmptyField(&'static str),
+    /// No collector metadata was provided.
     NoCollectors,
-    DuplicateCollectorOrder { order: usize },
-    DuplicateCollectorKey { key: String },
-    TooManyMetricValues { got: usize, max: usize },
+    /// Collector ordering value is duplicated.
+    DuplicateCollectorOrder {
+        /// Duplicated order index.
+        order: usize,
+    },
+    /// Collector key is duplicated.
+    DuplicateCollectorKey {
+        /// Duplicated collector key.
+        key: String,
+    },
+    /// Metric values exceeded fixed capacity.
+    TooManyMetricValues {
+        /// Actual number of values provided.
+        got: usize,
+        /// Maximum accepted number of values.
+        max: usize,
+    },
+    /// Control command string could not be parsed.
     InvalidControlCommand(String),
 }
 

@@ -4,6 +4,7 @@ use crate::constants::{INVALID_METRIC_VALUE, METRIC_VALUES_CAPACITY};
 use crate::errors::CoreError;
 use crate::types::CollectorMetadata;
 
+/// Validates that a required field is not empty after trimming.
 pub fn validate_non_empty(field: &'static str, value: &str) -> Result<(), CoreError> {
     if value.trim().is_empty() {
         return Err(CoreError::EmptyField(field));
@@ -11,6 +12,10 @@ pub fn validate_non_empty(field: &'static str, value: &str) -> Result<(), CoreEr
     Ok(())
 }
 
+/// Normalizes metric values to [`METRIC_VALUES_CAPACITY`].
+///
+/// Returns an error when `values` exceeds capacity.
+/// Otherwise pads missing tail positions with [`INVALID_METRIC_VALUE`].
 pub fn normalize_metric_values(mut values: Vec<i64>) -> Result<Vec<i64>, CoreError> {
     if values.len() > METRIC_VALUES_CAPACITY {
         return Err(CoreError::TooManyMetricValues {
@@ -23,6 +28,12 @@ pub fn normalize_metric_values(mut values: Vec<i64>) -> Result<Vec<i64>, CoreErr
     Ok(values)
 }
 
+/// Validates collector list invariants.
+///
+/// Invariants:
+/// - at least one collector exists
+/// - `order` is unique
+/// - `collector_key` is unique
 pub fn validate_collectors(collectors: &[CollectorMetadata]) -> Result<(), CoreError> {
     if collectors.is_empty() {
         return Err(CoreError::NoCollectors);
