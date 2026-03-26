@@ -23,14 +23,11 @@ pub trait Collector: Send + Sync {
 
 /// Trait representing a profiler made of one or more collectors.
 pub trait Profiler: Send + Sync {
-    /// Collector type used by this profiler.
-    type CollectorType: Collector;
-
     /// Returns profiler-level metadata.
     fn metadata(&self) -> &ProfilerMetadata;
 
     /// Returns all collectors owned by this profiler.
-    fn collectors(&self) -> &[Self::CollectorType];
+    fn collectors(&self) -> Vec<&dyn Collector>;
 
     fn connect(&mut self) -> Result<(), CoreError>;
 
