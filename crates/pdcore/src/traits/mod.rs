@@ -31,6 +31,16 @@ pub trait Profiler: Send + Sync {
 
     /// Returns all collectors owned by this profiler.
     fn collectors(&self) -> &[Self::CollectorType];
+
+    fn connect(&mut self) -> Result<(), CoreError>;
+
+    fn start(&mut self) -> Result<(), CoreError>;
+
+    fn pause(&mut self) -> Result<(), CoreError>;
+
+    fn restart(&mut self) -> Result<(), CoreError>;
+
+    fn stop(&mut self) -> Result<(), CoreError>;
 }
 
 /// Data-plane abstraction that assembles outgoing metric batches.
@@ -42,5 +52,9 @@ pub trait DataPlane {
 /// Control-plane abstraction for command-driven runtime control.
 pub trait ControlPlane {
     /// Applies a runtime control command.
-    fn apply_control(&mut self, command: ControlCommand) -> Result<(), CoreError>;
+    fn apply_control<P: Profiler>(
+        &mut self,
+        command: ControlCommand,
+        target: P,
+    ) -> Result<(), CoreError>;
 }
