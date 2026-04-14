@@ -3,8 +3,6 @@
 //! `pdcore` contains shared types, traits, constants, and validation logic
 //! used across profiler, registry, and app layers.
 
-/// Legacy atomic module kept for compatibility with existing integrations.
-pub mod atomic;
 /// Shared constants used by metric collection and aggregation.
 pub mod constants;
 /// Error definitions shared by constructors and validators.
