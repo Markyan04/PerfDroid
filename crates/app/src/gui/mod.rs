@@ -23,6 +23,8 @@ const WINDOW_WIDTH: f32 = 1440.0;
 const WINDOW_HEIGHT: f32 = 960.0;
 const CHART_HEIGHT: f32 = 250.0;
 const Y_AXIS_WIDTH: f32 = 72.0;
+const APP_PADDING_X: f32 = 40.0;
+const CHART_SECTION_PADDING_X: f32 = 32.0;
 const LINE_COLORS: [u32; 10] = [
     0x2563EB, 0xF97316, 0x10B981, 0xDB2777, 0x7C3AED, 0x0F766E, 0xDC2626, 0xCA8A04, 0x4F46E5,
     0x0891B2,
@@ -482,7 +484,7 @@ impl Render for PerfDroidDemo {
         self.drain_events();
         window.request_animation_frame();
         let window_width = f32::from(window.bounds().size.width);
-        let content_width = (window_width - 40.0).max(360.0);
+        let content_width = (window_width - APP_PADDING_X).max(360.0);
         let panel_width = if content_width >= 1100.0 {
             ((content_width - 24.0) / 3.0).max(320.0)
         } else if content_width >= 720.0 {
@@ -490,7 +492,7 @@ impl Render for PerfDroidDemo {
         } else {
             content_width
         };
-        let chart_width = content_width;
+        let chart_width = (content_width - CHART_SECTION_PADDING_X).max(320.0);
 
         div()
             .size_full()
