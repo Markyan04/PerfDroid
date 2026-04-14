@@ -22,9 +22,9 @@
 | Metric | 一个可被系统采集、展示、导出的性能指标，如 FPS、CPU_CLOCK、TEMP、POWER。 |
 | Metric Batch | 某一时刻、某一指标的一组结构化采样结果。 |
 | Device Descriptor | 对被测设备的识别描述，包括设备 ID、连接方式、型号、Android 版本等信息。 |
-| Exporter | GUI Layer 中负责将会话数据导出为 CSV / JSON / PNG / HTML 等格式的模块。 |
+| Exporter | GUI Layer 中负责将会话数据导出（当前版本仅支持 CSV）的模块。 |
 | Data Part | GUI Layer 中负责图表展示、数据列表展示、会话数据管理、时间区间删除与导出前数据预处理的功能区域。 |
-| Control Part | GUI Layer 中负责用户控制操作的功能区域，用于触发 Connect、Start、Pause、Restart、Stop、Export 等命令，并管理采样参数与测试流程。 |
+| Control Part | GUI Layer 中负责用户控制操作的功能区域，用于触发 Start、Pause、Restart、Stop、Export 等命令，并管理采样参数与测试流程。 |
 | Device Part | GUI Layer 中负责设备识别、设备选择、连接方式展示与设备基础信息展示的功能区域。 |
 
 ## 0.2 专有名词解释
@@ -65,7 +65,7 @@
   - `mA`
   - `mV`
   - `°C`
-- 如无特殊说明，时间戳统一使用毫秒级 Unix Timestamp。
+- 如无特殊说明，时间戳统一使用毫秒级 Unix Timestamp。当前 CSV 导出使用相对时间（`time_s`，单位秒）作为时间列。
 - 如无特殊说明，所有示例代码均为说明性伪代码或 Rust 风格伪代码，不保证可直接编译。
 
 # Part01 项目背景与目标
@@ -313,6 +313,7 @@ let batch = MetricBatch {
   - Pause
   - Restart
   - Stop
+- GUI 侧还提供 Export（CSV）动作。Export 不改变 SessionState，但受状态约束（仅 `Paused` / `Stopped` 允许）。
 - Aggregator 中定义如下状态枚举：
 ```Rust
 pub enum SessionState {
@@ -374,21 +375,22 @@ pub enum SessionState {
 #### 2.4.3.6 Control Plane 状态约束
 - 遵循如下状态流转规则：
 ```Text
-Disconnected -> Connected -> Running -> Paused -> Running -> Stopped
+Disconnected -> Connected -> Running -> Paused -> Running -> Stopped -> Connected
 ```
 允许的操作关系如下：
 | 当前状态	| 允许操作 |
 |---|---|
-| Disconnected |Connect |
-|Connected	|Start, Stop|
-|Running	|Pause, Stop|
-|Paused	|Restart, Stop|
-|Stopped	|Connect|
+| Disconnected | Connect |
+| Connected | Start, Stop |
+| Running | Pause, Stop |
+| Paused | Restart, Stop, Export |
+| Stopped | Connect, Export |
 
 - 不允许的操作应直接返回错误，例如：
   - Disconnected 状态下执行 Start
   - Running 状态下再次执行 Connect
   - Paused 状态下再次执行 Pause
+  - Running 状态下执行 Export
 
 ## 2.5 GUI Layer
 - 前两层只负责数据采集与聚合，只有在 GUI Layer 中，数据才会被组织为适合渲染、交互和导出的形式。
@@ -427,38 +429,33 @@ Disconnected -> Connected -> Running -> Paused -> Running -> Stopped
 ### 2.5.3 Data Part
 - Data Part 负责基于后端传输的数据绘制图表，并提供基础数据操作能力。
 - 功能包括：
+  - 多指标图表展示（当前包括 `CPU_CLOCK`、`CPU_USAGE`、`FPS`）
   - 单指标多通道展示
   - 实时当前值展示
-  - 窗口缩放（因为时间在一步步流逝，数据会越来越多）
-  - 指定时间范围数据删除
-- 例如，用户可删除某一时间范围的数据：
-  - 00:01 - 00:10
-- 删除后应同步影响：
-  - 图表显示
-  - 统计结果
-  - 导出结果
+  - 会话数据导出（CSV）
 
 ### 2.5.4 Control Part
 - Control Part 负责测试流程控制。
 - 包含以下功能：
-  - Connect
   - Start
   - Pause
   - Restart
   - Stop
-  - Export
+  - Export（CSV）
 - 此外还可配置：
   - 采样频率（Hz）
   - 被测试应用的包名（FPS模块将会依赖于此）
-  - 启用哪些指标
-  - 导出格式（默认CSV,第一版只支持CSV）
+  - 导出路径（跨平台系统文件保存对话框）
+  - 导出限制：仅 `Paused` 或 `Stopped` 状态允许导出
 
 ### 2.5.5 Device Part
 - Device Part 负责设备识别与连接方式管理。
 - 功能包括：
   - 展示当前可识别设备列表
+  - Detect ADB Devices（触发设备发现）
   - 显示连接方式（USB / WiFi）
   - 允许用户选择目标设备
+  - 执行 USB / Wireless 连接（Connect）
   - 展示设备基本信息：
     - 设备名称
     - 设备序列号
