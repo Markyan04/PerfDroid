@@ -4,13 +4,23 @@ use std::path::{Path, PathBuf};
 
 const ADB_SERVER_PORT: u16 = 5037;
 
-/// Returns the workspace root that contains the bundled `adb/` directory.
+/// Returns the host-specific bundled `adb` path relative to the app root.
+pub fn bundled_adb_relative_path() -> PathBuf {
+    PathBuf::from("adb")
+        .join(adb_platform_dir())
+        .join(adb_binary_name())
+}
+
+/// Returns the runtime root that contains the bundled `adb/` directory.
+///
+/// Packaged builds should resolve `adb` relative to the executable location.
+/// Local development still falls back to the source workspace root.
 pub fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("pdcore should live in <workspace>/crates/pdcore")
-        .to_path_buf()
+    let relative_adb_path = bundled_adb_relative_path();
+    candidate_roots()
+        .into_iter()
+        .find(|root| root.join(&relative_adb_path).exists())
+        .unwrap_or_else(source_workspace_root)
 }
 
 /// Returns the host-specific directory that contains the bundled `adb` binary.
@@ -20,7 +30,7 @@ pub fn workspace_adb_dir() -> PathBuf {
 
 /// Returns the host-specific bundled `adb` executable path.
 pub fn workspace_adb_path() -> PathBuf {
-    workspace_adb_dir().join(adb_binary_name())
+    workspace_root().join(bundled_adb_relative_path())
 }
 
 /// Creates an [`ADBServer`] configured to start from the bundled workspace-local `adb`.
@@ -61,20 +71,59 @@ fn adb_binary_name() -> &'static str {
     "adb"
 }
 
+fn candidate_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+
+    if let Ok(exe_path) = std::env::current_exe()
+        && let Some(exe_dir) = exe_path.parent()
+    {
+        push_ancestors(exe_dir, &mut roots);
+    }
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        push_ancestors(&current_dir, &mut roots);
+    }
+
+    roots.push(source_workspace_root());
+    roots
+}
+
+fn push_ancestors(path: &Path, roots: &mut Vec<PathBuf>) {
+    for ancestor in path.ancestors() {
+        let candidate = ancestor.to_path_buf();
+        if !roots.contains(&candidate) {
+            roots.push(candidate);
+        }
+    }
+}
+
+fn source_workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("pdcore should live in <workspace>/crates/pdcore")
+        .to_path_buf()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn bundled_adb_path_ends_with_expected_host_binary() {
-        let expected_suffix = Path::new("adb")
-            .join(adb_platform_dir())
-            .join(adb_binary_name());
-        assert!(workspace_adb_path().ends_with(expected_suffix));
+        assert!(workspace_adb_path().ends_with(bundled_adb_relative_path()));
     }
 
     #[test]
     fn workspace_root_contains_bundled_adb_directory() {
         assert_eq!(workspace_adb_dir(), workspace_root().join("adb").join(adb_platform_dir()));
+    }
+
+    #[test]
+    fn bundled_adb_relative_path_is_stable() {
+        let expected = Path::new("adb")
+            .join(adb_platform_dir())
+            .join(adb_binary_name());
+        assert_eq!(bundled_adb_relative_path(), expected);
     }
 }
