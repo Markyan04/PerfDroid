@@ -286,7 +286,9 @@ fn sample_once(
         }
     };
 
-    let current = parse_cpu_stat(&output).into_iter().collect::<HashMap<_, _>>();
+    let current = parse_cpu_stat(&output)
+        .into_iter()
+        .collect::<HashMap<_, _>>();
     if current.is_empty() {
         mark_all_invalid(writers);
         return previous;
@@ -452,8 +454,10 @@ fn open_target_device(
 fn run_shell(device: &mut impl ADBDeviceExt, command: &str) -> Result<String, CoreError> {
     let mut out = Vec::with_capacity(256);
     let mut err = Vec::with_capacity(256);
+    let command_owned = command.to_string();
+    let command_ref: &dyn AsRef<str> = &command_owned;
     let status = device
-        .shell_command(&command, Some(&mut out), Some(&mut err))
+        .shell_command(command_ref, Some(&mut out), Some(&mut err))
         .map_err(|err| CoreError::Runtime(format!("adb shell failed for `{command}`: {err}")))?;
 
     if status.is_some_and(|code| code != 0) {
