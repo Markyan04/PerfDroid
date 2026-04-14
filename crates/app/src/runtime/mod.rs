@@ -99,6 +99,10 @@ impl PerfDroidRuntime {
         }
     }
 
+    pub fn request_status(&self, message: impl Into<String>) {
+        let _ = self.event_tx.send(AggregatorEvent::Status(message.into()));
+    }
+
     pub fn request_start(&self, hz: u64) {
         if let Err(err) = self.start(hz) {
             let _ = self.event_tx.send(AggregatorEvent::Status(err.to_string()));

@@ -1,5 +1,7 @@
 use adb_client::{ADBDeviceExt, server::ADBServer};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionKind {
@@ -108,7 +110,7 @@ pub fn connect_wireless(serial: &str) -> Result<(String, String), String> {
     let ip_address = query_wireless_ip(serial)?;
     let tcpip_output = run_adb(&["-s", serial, "tcpip", "5555"])?;
     let wifi_serial = format!("{ip_address}:5555");
-    let connect_output = run_adb(&["connect", &wifi_serial])?;
+    let connect_output = connect_wireless_with_retry(&wifi_serial)?;
     let message = format!(
         "Wireless ADB enabled for `{serial}` at `{wifi_serial}`. {} {}",
         tcpip_output.trim(),
@@ -148,12 +150,32 @@ fn infer_connection_kind(serial: &str) -> ConnectionKind {
 
 fn query_wireless_ip(serial: &str) -> Result<String, String> {
     let route = run_adb(&["-s", serial, "shell", "ip", "route"])?;
-    if let Some(address) = extract_ip_address(&route) {
+    if let Some(address) = extract_route_src_ip(&route) {
         return Ok(address);
     }
 
-    let wlan0 = run_adb(&["-s", serial, "shell", "ip", "-f", "inet", "addr", "show", "wlan0"])?;
-    if let Some(address) = extract_ip_address(&wlan0) {
+    let addresses = run_adb(&[
+        "-s",
+        serial,
+        "shell",
+        "ip",
+        "-f",
+        "inet",
+        "-o",
+        "addr",
+        "show",
+        "up",
+        "scope",
+        "global",
+    ])?;
+    if let Some(address) = extract_inet_ip(&addresses) {
+        return Ok(address);
+    }
+
+    let wlan0 = run_adb(&[
+        "-s", serial, "shell", "ip", "-f", "inet", "addr", "show", "wlan0",
+    ])?;
+    if let Some(address) = extract_inet_ip(&wlan0) {
         return Ok(address);
     }
 
@@ -162,24 +184,110 @@ fn query_wireless_ip(serial: &str) -> Result<String, String> {
     ))
 }
 
-fn extract_ip_address(text: &str) -> Option<String> {
-    for token in text.split(|ch: char| ch.is_whitespace() || ch == '/') {
-        let candidate = token.trim();
-        if is_ipv4_address(candidate) {
-            return Some(candidate.to_string());
+fn connect_wireless_with_retry(wifi_serial: &str) -> Result<String, String> {
+    const CONNECT_RETRIES: usize = 5;
+    const CONNECT_RETRY_DELAY_MS: u64 = 300;
+    let mut last_message = String::new();
+
+    for attempt in 0..CONNECT_RETRIES {
+        match run_adb(&["connect", wifi_serial]) {
+            Ok(output) => {
+                last_message = output;
+                if is_adb_connect_success(&last_message) {
+                    return Ok(last_message);
+                }
+            }
+            Err(err) => {
+                last_message = err;
+            }
+        }
+
+        if attempt + 1 < CONNECT_RETRIES {
+            thread::sleep(Duration::from_millis(CONNECT_RETRY_DELAY_MS));
+        }
+    }
+
+    Err(format!(
+        "failed to connect to `{wifi_serial}` after {CONNECT_RETRIES} attempts: {last_message}"
+    ))
+}
+
+fn is_ipv4_address(value: &str) -> bool {
+    parse_ipv4_address(value).is_some()
+}
+
+fn parse_ipv4_address(value: &str) -> Option<[u8; 4]> {
+    let octets = value
+        .split('.')
+        .map(|part| part.parse::<u8>())
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+
+    if octets.len() != 4 {
+        return None;
+    }
+
+    Some([octets[0], octets[1], octets[2], octets[3]])
+}
+
+fn extract_route_src_ip(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let tokens = line.split_whitespace().collect::<Vec<_>>();
+        for window in tokens.windows(2) {
+            if window[0] == "src" && is_ipv4_address(window[1]) {
+                return Some(window[1].to_string());
+            }
         }
     }
 
     None
 }
 
-fn is_ipv4_address(value: &str) -> bool {
-    let octets = value
-        .split('.')
-        .map(|part| part.parse::<u8>())
-        .collect::<Result<Vec<_>, _>>();
+fn extract_inet_ip(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let tokens = line.split_whitespace().collect::<Vec<_>>();
+        for window in tokens.windows(2) {
+            if window[0] == "inet" {
+                let candidate = window[1].split('/').next().unwrap_or("");
+                if is_ipv4_address(candidate) {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+    }
 
-    matches!(octets, Ok(parts) if parts.len() == 4)
+    None
+}
+
+fn is_adb_connect_success(output: &str) -> bool {
+    let normalized = output.to_ascii_lowercase();
+    normalized.contains("connected to") || normalized.contains("already connected to")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_parser_uses_src_ip_instead_of_network_prefix() {
+        let route = "10.0.0.0/24 dev wlan0 proto kernel scope link src 10.0.0.21\n";
+        assert_eq!(extract_route_src_ip(route).as_deref(), Some("10.0.0.21"));
+    }
+
+    #[test]
+    fn inet_parser_extracts_host_address() {
+        let addr = "3: wlan0    inet 192.168.1.48/24 brd 192.168.1.255 scope global wlan0";
+        assert_eq!(extract_inet_ip(addr).as_deref(), Some("192.168.1.48"));
+    }
+
+    #[test]
+    fn connect_success_recognizes_adb_connect_messages() {
+        assert!(is_adb_connect_success("connected to 192.168.1.48:5555"));
+        assert!(is_adb_connect_success("already connected to 192.168.1.48:5555"));
+        assert!(!is_adb_connect_success(
+            "failed to connect to 192.168.1.48:5555"
+        ));
+    }
 }
 
 fn run_adb(args: &[&str]) -> Result<String, String> {

@@ -1,4 +1,5 @@
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::{collections::hash_map::DefaultHasher};
@@ -14,9 +15,11 @@ use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::chart::{AreaChart, LineChart};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::Disableable;
 
 use crate::aggregation::AggregatorEvent;
 use crate::device::{AdbDetectedDevice, DeviceDescriptor};
+use crate::export::export_session_to_csv;
 use crate::runtime::PerfDroidRuntime;
 use crate::session::SessionState;
 use crate::storage::SessionStore;
@@ -445,6 +448,62 @@ impl PerfDroidDemo {
             .label("Stop")
             .on_click(move |_, _, _| runtime.request_stop());
 
+        let export_allowed = self.can_export_csv();
+        let export_state = self.state;
+        let export_hz = self.selected_hz;
+        let export_session = self.session.clone();
+        let export_runtime = Arc::clone(&self.runtime);
+        let export_csv = Button::new("export-csv")
+            .label("Export CSV")
+            .on_click(move |_, _, cx| {
+                if !matches!(export_state, SessionState::Paused | SessionState::Stopped) {
+                    export_runtime.request_status(
+                        "CSV export is only available in Paused or Stopped state.",
+                    );
+                    return;
+                }
+
+                let initial_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let receiver =
+                    cx.prompt_for_new_path(&initial_dir, Some("perfdroid_session.csv"));
+                let export_runtime = Arc::clone(&export_runtime);
+                let export_session = export_session.clone();
+                cx.background_executor().spawn(async move {
+                    let selected_path = match receiver.await {
+                        Ok(Ok(Some(path))) => path,
+                        Ok(Ok(None)) => {
+                            export_runtime.request_status("CSV export canceled.");
+                            return;
+                        }
+                        Ok(Err(err)) => {
+                            export_runtime.request_status(format!(
+                                "failed to open save dialog for CSV export: {err}"
+                            ));
+                            return;
+                        }
+                        Err(err) => {
+                            export_runtime.request_status(format!(
+                                "failed while waiting for CSV save dialog result: {err}"
+                            ));
+                            return;
+                        }
+                    };
+
+                    let output_path = ensure_csv_extension(selected_path);
+                    match export_session_to_csv(&output_path, &export_session, export_hz) {
+                        Ok(rows) => export_runtime.request_status(format!(
+                            "CSV exported: {} row(s) -> {}",
+                            rows,
+                            output_path.display()
+                        )),
+                        Err(err) => {
+                            export_runtime.request_status(format!("CSV export failed: {err}"))
+                        }
+                    }
+                }).detach();
+            })
+            .disabled(!export_allowed);
+
         section_card(
             "Control Part",
             div()
@@ -501,9 +560,24 @@ impl PerfDroidDemo {
                                 .text_center()
                                 .child(self.status_line.clone()),
                         ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .items_center()
+                        .gap_1()
+                        .child(export_csv)
+                        .child(helper_text(
+                            "CSV export is only enabled when session state is Paused or Stopped.",
+                        )),
                 ),
             panel_width,
         )
+    }
+
+    fn can_export_csv(&self) -> bool {
+        matches!(self.state, SessionState::Paused | SessionState::Stopped)
     }
 
     fn render_adb_part(&self, panel_width: f32) -> impl IntoElement {
@@ -767,6 +841,18 @@ fn chart_section(content: impl IntoElement) -> impl IntoElement {
         .border_1()
         .bg(rgb(0xFFF9F1))
         .child(content)
+}
+
+fn ensure_csv_extension(path: PathBuf) -> PathBuf {
+    if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
+    {
+        path
+    } else {
+        path.with_extension("csv")
+    }
 }
 
 fn stable_u64(value: &str) -> u64 {
