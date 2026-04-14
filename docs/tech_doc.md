@@ -1,8 +1,8 @@
 # PerfDroid 开发技术文档
 
 # Part00 文档规范
-- Doc Version 1.1
-- Update at 15:47 30/03/2026
+- Doc Version 1.2
+- Update at 21:57 14/04/2026
 
 ## 0.1 文档用词统一标准
 | 用词 | 含义 |
