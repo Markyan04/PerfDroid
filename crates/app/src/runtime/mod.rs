@@ -10,7 +10,7 @@ use profiler_fps::FpsProfiler;
 use registry::ProfilerRegistry;
 
 use crate::aggregation::{AggregationWorker, AggregatorEvent};
-use crate::device::{DeviceDescriptor, query_device_descriptor};
+use crate::device::{connect_wireless, list_adb_devices, query_device_descriptor, DeviceDescriptor};
 use crate::session::SessionState;
 
 #[derive(Clone)]
@@ -47,8 +47,54 @@ impl PerfDroidRuntime {
         }
     }
 
+    pub fn request_refresh_devices(&self) {
+        match list_adb_devices() {
+            Ok(devices) => {
+                let count = devices.len();
+                let _ = self
+                    .event_tx
+                    .send(AggregatorEvent::DeviceDiscoveryUpdated(devices));
+                let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                    "ADB detection complete: {count} device(s) found."
+                )));
+            }
+            Err(err) => {
+                let _ = self.event_tx.send(AggregatorEvent::Status(err));
+            }
+        }
+    }
+
+    pub fn request_connect_usb(&self, serial: String) {
+        if let Err(err) = self.connect(serial.clone()) {
+            let _ = self.event_tx.send(AggregatorEvent::Status(err.to_string()));
+        } else {
+            let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                "Connected to `{serial}` through USB."
+            )));
+        }
+    }
+
+    pub fn request_connect_wireless(&self, serial: String) {
+        match connect_wireless(&serial) {
+            Ok((wireless_serial, detail)) => {
+                if let Err(err) = self.connect(wireless_serial.clone()) {
+                    let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                        "{detail} Failed to finish wireless session setup for `{wireless_serial}`: {err}"
+                    )));
+                } else {
+                    let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                        "{detail} Connected through WiFi as `{wireless_serial}`."
+                    )));
+                }
+            }
+            Err(err) => {
+                let _ = self.event_tx.send(AggregatorEvent::Status(err));
+            }
+        }
+    }
+
     pub fn request_connect(&self, serial: Option<String>) {
-        if let Err(err) = self.connect(serial) {
+        if let Err(err) = self.connect(serial.unwrap_or_else(|| "default".to_string())) {
             let _ = self.event_tx.send(AggregatorEvent::Status(err.to_string()));
         }
     }
@@ -134,26 +180,31 @@ impl PerfDroidRuntime {
             .unwrap_or(SessionState::Disconnected)
     }
 
-    fn connect(&self, serial: Option<String>) -> Result<(), CoreError> {
+    fn connect(&self, serial: String) -> Result<(), CoreError> {
         let mut inner = self
             .inner
             .lock()
             .map_err(|_| CoreError::Runtime("runtime lock poisoned".to_string()))?;
         ensure_transition(inner.state, ControlCommand::Connect)?;
 
-        let device = query_device_descriptor(serial.as_deref()).map_err(CoreError::Runtime)?;
+        let serial_arg = if serial == "default" {
+            None
+        } else {
+            Some(serial.as_str())
+        };
+        let device = query_device_descriptor(serial_arg).map_err(CoreError::Runtime)?;
         inner.registry.clear();
         inner.device = Some(device.clone());
 
         let mut cpu_clock_profiler =
-            CpuClockProfiler::new(serial.clone(), Duration::from_millis(100))?;
+            CpuClockProfiler::new(serial_arg.map(str::to_string), Duration::from_millis(100))?;
         cpu_clock_profiler.connect()?;
         let cpu_clock_metadata = cpu_clock_profiler.metadata_clone();
         inner.registry.register(cpu_clock_metadata.clone());
         inner.cpu_clock_profiler = Some(Arc::new(Mutex::new(cpu_clock_profiler)));
 
         let fps_profiler = match FpsProfiler::new(
-            serial.clone(),
+            serial_arg.map(str::to_string),
             Duration::from_secs(1),
             inner.package_name.clone(),
         ) {

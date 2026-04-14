@@ -9,7 +9,7 @@ use pdcore::types::MetricBatch;
 use profiler_cpu_clock::CpuClockProfiler;
 use profiler_fps::FpsProfiler;
 
-use crate::device::DeviceDescriptor;
+use crate::device::{AdbDetectedDevice, DeviceDescriptor};
 use crate::session::SessionState;
 use crate::storage::TimestampedBatch;
 
@@ -17,6 +17,7 @@ use crate::storage::TimestampedBatch;
 pub enum AggregatorEvent {
     StateChanged(SessionState),
     DeviceUpdated(DeviceDescriptor),
+    DeviceDiscoveryUpdated(Vec<AdbDetectedDevice>),
     MetadataRegistered(String),
     MetricBatch(TimestampedBatch),
     PackageNameChanged(String),

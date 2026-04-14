@@ -1,5 +1,7 @@
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
+use std::{collections::hash_map::DefaultHasher};
 
 use gpui::{
     App, AppContext, Application, Bounds, Context, Entity, IntoElement, ParentElement, Render,
@@ -14,7 +16,7 @@ use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
 
 use crate::aggregation::AggregatorEvent;
-use crate::device::DeviceDescriptor;
+use crate::device::{AdbDetectedDevice, DeviceDescriptor};
 use crate::runtime::PerfDroidRuntime;
 use crate::session::SessionState;
 use crate::storage::SessionStore;
@@ -68,8 +70,9 @@ struct PerfDroidDemo {
     session: SessionStore,
     state: SessionState,
     device: Option<DeviceDescriptor>,
+    detected_devices: Vec<AdbDetectedDevice>,
     status_line: String,
-    metadata_line: String,
+    metadata_lines: Vec<String>,
     selected_hz: u64,
     package_name: String,
     package_input: Entity<InputState>,
@@ -123,8 +126,9 @@ impl PerfDroidDemo {
             session: SessionStore::default(),
             state: SessionState::Disconnected,
             device: None,
+            detected_devices: Vec::new(),
             status_line: "Waiting for Connect.".to_string(),
-            metadata_line: "No profiler metadata registered.".to_string(),
+            metadata_lines: vec!["No profiler metadata registered.".to_string()],
             selected_hz: 4,
             package_name: initial_package_name,
             package_input,
@@ -147,11 +151,16 @@ impl PerfDroidDemo {
                 AggregatorEvent::DeviceUpdated(device) => {
                     self.device = Some(device);
                 }
+                AggregatorEvent::DeviceDiscoveryUpdated(devices) => {
+                    self.detected_devices = devices;
+                }
                 AggregatorEvent::MetadataRegistered(metadata) => {
-                    if self.metadata_line == "No profiler metadata registered." {
-                        self.metadata_line = metadata;
-                    } else if !self.metadata_line.contains(&metadata) {
-                        self.metadata_line = format!("{} | {}", self.metadata_line, metadata);
+                    if self.metadata_lines.len() == 1
+                        && self.metadata_lines[0] == "No profiler metadata registered."
+                    {
+                        self.metadata_lines = vec![metadata];
+                    } else if !self.metadata_lines.contains(&metadata) {
+                        self.metadata_lines.push(metadata);
                     }
                 }
                 AggregatorEvent::MetricBatch(batch) => {
@@ -365,7 +374,7 @@ impl PerfDroidDemo {
     }
 
     fn render_device_part(&self, panel_width: f32) -> impl IntoElement {
-        let lines = if let Some(device) = &self.device {
+        let mut lines = if let Some(device) = &self.device {
             vec![
                 format!("Model: {}", device.model),
                 format!("Serial: {}", device.serial),
@@ -382,6 +391,13 @@ impl PerfDroidDemo {
                 "SoC: --".to_string(),
             ]
         };
+        lines.extend([
+            format!(
+                "Frames cached: {}",
+                self.session.cpu_clock_frames().len() + self.session.fps_frames().len()
+            ),
+            format!("Runtime snapshot: {}", self.runtime.state().as_str()),
+        ]);
 
         section_card(
             "Device Part",
@@ -389,18 +405,26 @@ impl PerfDroidDemo {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .children(lines.into_iter().map(info_row)),
+                .children(lines.into_iter().map(info_row))
+                .child(form_label("Metadata"))
+                .child(
+                    div()
+                        .w_full()
+                        .p_2()
+                        .rounded_md()
+                        .bg(rgb(0xF7EEE0))
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .children(self.metadata_lines.iter().cloned().map(|line| {
+                            div().w_full().whitespace_normal().child(line)
+                        })),
+                ),
             panel_width,
         )
     }
 
     fn render_control_part(&self, panel_width: f32) -> impl IntoElement {
-        let runtime = Arc::clone(&self.runtime);
-        let connect = Button::new("connect")
-            .primary()
-            .label("Connect")
-            .on_click(move |_, _, _| runtime.request_connect(None));
-
         let runtime = Arc::clone(&self.runtime);
         let start = Button::new("start")
             .label(format!("Start {}Hz", self.selected_hz))
@@ -458,7 +482,6 @@ impl PerfDroidDemo {
                         .flex_wrap()
                         .gap_2()
                         .justify_center()
-                        .child(connect)
                         .child(start)
                         .child(pause)
                         .child(restart)
@@ -471,11 +494,95 @@ impl PerfDroidDemo {
                         .p_2()
                         .rounded_md()
                         .bg(rgb(0xF4ECE0))
-                        .text_center()
-                        .child(self.status_line.clone()),
+                        .child(
+                            div()
+                                .w_full()
+                                .whitespace_normal()
+                                .text_center()
+                                .child(self.status_line.clone()),
+                        ),
                 ),
             panel_width,
         )
+    }
+
+    fn render_adb_part(&self, panel_width: f32) -> impl IntoElement {
+        let runtime = Arc::clone(&self.runtime);
+        let detect = Button::new("detect-devices")
+            .primary()
+            .label("Detect ADB Devices")
+            .on_click(move |_, _, _| runtime.request_refresh_devices());
+
+        let content = if self.detected_devices.is_empty() {
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(detect)
+                .child(helper_text(
+                    "No ADB devices listed yet. Detect devices first, then choose USB or Wireless.",
+                ))
+                .child(helper_text(
+                    "Wireless connection requires the PC and device to be on the same LAN.",
+                ))
+        } else {
+            div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(detect)
+                .child(helper_text(
+                    "Wireless connection requires the PC and device to be on the same LAN.",
+                ))
+                .children(
+                    self.detected_devices
+                        .iter()
+                        .cloned()
+                        .map(|device| self.render_detected_device_card(device)),
+                )
+        };
+
+        section_card("ADB Device Part", content, panel_width)
+    }
+
+    fn render_detected_device_card(&self, device: AdbDetectedDevice) -> impl IntoElement {
+        let serial_id = stable_u64(&device.serial);
+        let usb_runtime = Arc::clone(&self.runtime);
+        let usb_serial = device.serial.clone();
+        let connect_usb = Button::new(("usb", serial_id))
+            .label("Wired")
+            .on_click(move |_, _, _| usb_runtime.request_connect_usb(usb_serial.clone()));
+
+        let wifi_runtime = Arc::clone(&self.runtime);
+        let wifi_serial = device.serial.clone();
+        let connect_wifi = Button::new(("wifi", serial_id))
+            .label("Wireless")
+            .on_click(move |_, _, _| wifi_runtime.request_connect_wireless(wifi_serial.clone()));
+
+        div()
+            .w_full()
+            .p_3()
+            .rounded_md()
+            .border_1()
+            .bg(rgb(0xF7EEE0))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(form_label(format!("{} ({})", device.model, device.serial)))
+            .child(info_row(format!("ADB state: {}", device.adb_state)))
+            .child(info_row(format!(
+                "Detected transport: {}",
+                device.connection.as_str()
+            )))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(connect_usb)
+                    .child(connect_wifi),
+            )
     }
 }
 
@@ -510,24 +617,9 @@ impl Render for PerfDroidDemo {
                     .flex_wrap()
                     .gap_3()
                     .justify_center()
+                    .child(self.render_adb_part(panel_width))
                     .child(self.render_device_part(panel_width))
-                    .child(self.render_control_part(panel_width))
-                    .child(section_card(
-                        "Session / Registry",
-                        div().flex().flex_col().gap_2().children(vec![
-                            info_row(format!(
-                                "Frames cached: {}",
-                                self.session.cpu_clock_frames().len()
-                                    + self.session.fps_frames().len()
-                            )),
-                            info_row(format!(
-                                "Runtime snapshot: {}",
-                                self.runtime.state().as_str()
-                            )),
-                            info_row(format!("Metadata: {}", self.metadata_line)),
-                        ]),
-                        panel_width,
-                    )),
+                    .child(self.render_control_part(panel_width)),
             )
             .child(chart_section(self.render_cpu_clock_chart(chart_width)))
             .child(chart_section(self.render_fps_chart(chart_width)))
@@ -675,4 +767,10 @@ fn chart_section(content: impl IntoElement) -> impl IntoElement {
         .border_1()
         .bg(rgb(0xFFF9F1))
         .child(content)
+}
+
+fn stable_u64(value: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
 }
