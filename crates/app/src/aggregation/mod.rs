@@ -7,6 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use pdcore::CoreError;
 use pdcore::types::MetricBatch;
 use profiler_cpu_clock::CpuClockProfiler;
+use profiler_cpu_usage::CpuUsageProfiler;
 use profiler_fps::FpsProfiler;
 
 use crate::device::{AdbDetectedDevice, DeviceDescriptor};
@@ -62,6 +63,15 @@ impl FpsDataPlane {
     }
 }
 
+pub struct CpuUsageDataPlane;
+
+impl CpuUsageDataPlane {
+    pub fn build_metric_batch(profiler: &CpuUsageProfiler) -> Result<MetricBatch, CoreError> {
+        let metadata = profiler.metadata_clone();
+        MetricBatch::new(metadata.profiler_key, "%", profiler.snapshot_values())
+    }
+}
+
 pub struct AggregationWorker {
     stop_tx: Sender<()>,
     pause_flag: Arc<AtomicBool>,
@@ -71,6 +81,7 @@ pub struct AggregationWorker {
 impl AggregationWorker {
     pub fn spawn(
         cpu_clock_profiler: Option<Arc<Mutex<CpuClockProfiler>>>,
+        cpu_usage_profiler: Option<Arc<Mutex<CpuUsageProfiler>>>,
         fps_profiler: Option<Arc<Mutex<FpsProfiler>>>,
         hz: u64,
         tx: Sender<AggregatorEvent>,
@@ -98,6 +109,20 @@ impl AggregationWorker {
                         .lock()
                         .ok()
                         .and_then(|profiler| CpuClockDataPlane::build_metric_batch(&profiler).ok());
+
+                    if let Some(batch) = maybe_batch {
+                        let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
+                            timestamp_ms: unix_timestamp_ms(),
+                            batch,
+                        }));
+                    }
+                }
+
+                if let Some(profiler) = cpu_usage_profiler.as_ref() {
+                    let maybe_batch = profiler
+                        .lock()
+                        .ok()
+                        .and_then(|profiler| CpuUsageDataPlane::build_metric_batch(&profiler).ok());
 
                     if let Some(batch) = maybe_batch {
                         let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {

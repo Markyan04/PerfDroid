@@ -45,8 +45,11 @@ pub fn export_session_to_csv(
 }
 
 fn collect_frames(session: &SessionStore) -> Vec<&TimestampedBatch> {
-    let mut frames = Vec::with_capacity(session.cpu_clock_frames().len() + session.fps_frames().len());
+    let mut frames = Vec::with_capacity(
+        session.cpu_clock_frames().len() + session.cpu_usage_frames().len() + session.fps_frames().len(),
+    );
     frames.extend(session.cpu_clock_frames().iter());
+    frames.extend(session.cpu_usage_frames().iter());
     frames.extend(session.fps_frames().iter());
     frames
 }

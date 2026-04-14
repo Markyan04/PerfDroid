@@ -10,6 +10,7 @@ pub struct TimestampedBatch {
 #[derive(Debug, Clone, Default)]
 pub struct SessionStore {
     cpu_clock: Vec<TimestampedBatch>,
+    cpu_usage: Vec<TimestampedBatch>,
     fps: Vec<TimestampedBatch>,
 }
 
@@ -17,6 +18,7 @@ impl SessionStore {
     pub fn push(&mut self, frame: TimestampedBatch) {
         match frame.batch.metric_key.as_str() {
             "CPU_CLOCK" => self.cpu_clock.push(frame),
+            "CPU_USAGE" => self.cpu_usage.push(frame),
             "FPS" => self.fps.push(frame),
             _ => {}
         }
@@ -30,6 +32,14 @@ impl SessionStore {
         self.cpu_clock.last()
     }
 
+    pub fn cpu_usage_frames(&self) -> &[TimestampedBatch] {
+        &self.cpu_usage
+    }
+
+    pub fn latest_cpu_usage(&self) -> Option<&TimestampedBatch> {
+        self.cpu_usage.last()
+    }
+
     pub fn fps_frames(&self) -> &[TimestampedBatch] {
         &self.fps
     }
@@ -40,6 +50,10 @@ impl SessionStore {
 
     pub fn delete_range(&mut self, start_ms: u64, end_ms: u64) {
         self.cpu_clock
+            .retain(|frame| frame.timestamp_ms < start_ms || frame.timestamp_ms > end_ms);
+        self.cpu_usage
+            .retain(|frame| frame.timestamp_ms < start_ms || frame.timestamp_ms > end_ms);
+        self.fps
             .retain(|frame| frame.timestamp_ms < start_ms || frame.timestamp_ms > end_ms);
     }
 
@@ -65,5 +79,18 @@ impl SessionStore {
                 .copied()
                 .filter(|value| *value != INVALID_METRIC_VALUE)
         })
+    }
+
+    pub fn latest_cpu_usage_values(&self) -> Vec<Option<i64>> {
+        self.latest_cpu_usage()
+            .map(|frame| {
+                frame
+                    .batch
+                    .values
+                    .iter()
+                    .map(|value| (*value != INVALID_METRIC_VALUE).then_some(*value))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }

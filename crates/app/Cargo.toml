@@ -9,5 +9,6 @@ gpui.workspace = true
 gpui-component.workspace = true
 pdcore = { path = "../pdcore" }
 profiler-cpu-clock = { path = "../profiler/cpu_clock" }
+profiler-cpu-usage = { path = "../profiler/cpu_usage" }
 profiler-fps = { path = "../profiler/fps" }
 registry = { path = "../registry" }

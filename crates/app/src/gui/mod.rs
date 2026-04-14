@@ -262,15 +262,7 @@ impl PerfDroidDemo {
             .flex_col()
             .gap_3()
             .child(section_title("CPU Clock"))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .justify_center()
-                    .gap_2()
-                    .child(self.current_value_cards()),
-            )
+            .child(self.current_value_cards(chart_width))
             .child(
                 div()
                     .flex()
@@ -345,15 +337,145 @@ impl PerfDroidDemo {
             .child(chart_footer("Metric: FPS | unit: FPS | collector: main"))
     }
 
-    fn current_value_cards(&self) -> impl IntoElement {
-        let latest = self.session.latest_values();
-        if latest.is_empty() {
-            return div().child(metric_card("CPU policy", "--"));
+    fn build_cpu_usage_rows(&self) -> Vec<PlotRow> {
+        let Some(first) = self.session.cpu_usage_frames().first() else {
+            return Vec::new();
+        };
+
+        self.session
+            .cpu_usage_frames()
+            .iter()
+            .map(|frame| {
+                let elapsed_s =
+                    (frame.timestamp_ms.saturating_sub(first.timestamp_ms)) as f64 / 1000.0;
+                let mut values = [0.0; 10];
+                for (idx, value) in frame.batch.values.iter().copied().enumerate().take(10) {
+                    values[idx] = if value < 0 { 0.0 } else { value as f64 };
+                }
+
+                PlotRow {
+                    time_label: format!("{elapsed_s:.1}s").into(),
+                    values,
+                }
+            })
+            .collect()
+    }
+
+    fn render_cpu_usage_chart(&self, chart_width: f32) -> impl IntoElement {
+        let rows = self.build_cpu_usage_rows();
+        let max_value = rows
+            .iter()
+            .flat_map(|row| row.values.iter().copied())
+            .fold(0.0_f64, f64::max)
+            .max(100.0);
+        let line_count = self
+            .session
+            .latest_cpu_usage()
+            .map(|frame| {
+                frame
+                    .batch
+                    .values
+                    .iter()
+                    .take_while(|value| **value >= 0)
+                    .count()
+                    .max(1)
+            })
+            .unwrap_or(1);
+
+        let tick_margin = (rows.len() / 12).max(1);
+        let mut chart = AreaChart::new(rows)
+            .x(|row: &PlotRow| row.time_label.clone())
+            .tick_margin(tick_margin);
+        let plot_width = (chart_width - Y_AXIS_WIDTH).max(320.0);
+
+        for line_idx in 0..line_count {
+            let color = LINE_COLORS[line_idx % LINE_COLORS.len()];
+            chart = chart
+                .y(move |row: &PlotRow| row.values[line_idx])
+                .stroke(rgb(color))
+                .linear()
+                .fill(transparent_black());
         }
 
-        div().children(latest.into_iter().enumerate().filter_map(|(idx, value)| {
-            value.map(|value| metric_card(format!("policy{idx}"), format!("{value} MHz")))
-        }))
+        div()
+            .w(px(chart_width))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(section_title("CPU Usage"))
+            .child(self.current_cpu_usage_cards(chart_width))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .child(render_y_axis(max_value, "%"))
+                    .child(
+                        div()
+                            .w(px(plot_width))
+                            .h(px(CHART_HEIGHT))
+                            .border_1()
+                            .rounded_md()
+                            .p_2()
+                            .child(chart),
+                    ),
+            )
+            .child(render_legend((0..line_count).map(|idx| {
+                (format!("policy{idx}"), LINE_COLORS[idx % LINE_COLORS.len()])
+            })))
+            .child(chart_footer(
+                "Metric: CPU_USAGE | unit: % | fixed width values: 10",
+            ))
+    }
+
+    fn current_value_cards(&self, chart_width: f32) -> impl IntoElement {
+        let latest = self.session.latest_values();
+        if latest.is_empty() {
+            return div()
+                .w(px(chart_width))
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .justify_center()
+                .gap_2()
+                .child(metric_card("CPU policy", "--"));
+        }
+
+        div()
+            .w(px(chart_width))
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .justify_center()
+            .gap_2()
+            .children(latest.into_iter().enumerate().filter_map(|(idx, value)| {
+                value.map(|value| metric_card(format!("policy{idx}"), format!("{value} MHz")))
+            }))
+    }
+
+    fn current_cpu_usage_cards(&self, chart_width: f32) -> impl IntoElement {
+        let latest = self.session.latest_cpu_usage_values();
+        if latest.is_empty() {
+            return div()
+                .w(px(chart_width))
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .justify_center()
+                .gap_2()
+                .child(metric_card("CPU policy", "--"));
+        }
+
+        div()
+            .w(px(chart_width))
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .justify_center()
+            .gap_2()
+            .children(latest.into_iter().enumerate().filter_map(|(idx, value)| {
+                value.map(|value| metric_card(format!("policy{idx}"), format!("{value} %")))
+            }))
     }
 
     fn render_hz_input(&self) -> impl IntoElement {
@@ -392,7 +514,9 @@ impl PerfDroidDemo {
         lines.extend([
             format!(
                 "Frames cached: {}",
-                self.session.cpu_clock_frames().len() + self.session.fps_frames().len()
+                self.session.cpu_clock_frames().len()
+                    + self.session.cpu_usage_frames().len()
+                    + self.session.fps_frames().len()
             ),
             format!("Runtime snapshot: {}", self.runtime.state().as_str()),
         ]);
@@ -705,6 +829,8 @@ impl Render for PerfDroidDemo {
             )
             .child(div().h(px(20.0)))
             .child(chart_section(self.render_cpu_clock_chart(chart_width)))
+            .child(div().h(px(12.0)))
+            .child(chart_section(self.render_cpu_usage_chart(chart_width)))
             .child(div().h(px(12.0)))
             .child(chart_section(self.render_fps_chart(chart_width)))
     }

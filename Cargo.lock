@@ -109,6 +109,7 @@ dependencies = [
  "gpui-component",
  "pdcore",
  "profiler-cpu-clock",
+ "profiler-cpu-usage",
  "profiler-fps",
  "registry",
 ]
@@ -4450,6 +4451,7 @@ dependencies = [
 name = "profiler-cpu-usage"
 version = "0.1.0"
 dependencies = [
+ "adb_client",
  "pdcore",
 ]
 

@@ -6,6 +6,7 @@ use pdcore::CoreError;
 use pdcore::traits::Profiler;
 use pdcore::types::ControlCommand;
 use profiler_cpu_clock::CpuClockProfiler;
+use profiler_cpu_usage::CpuUsageProfiler;
 use profiler_fps::FpsProfiler;
 use registry::ProfilerRegistry;
 
@@ -22,6 +23,7 @@ pub struct PerfDroidRuntime {
 struct RuntimeInner {
     state: SessionState,
     cpu_clock_profiler: Option<Arc<Mutex<CpuClockProfiler>>>,
+    cpu_usage_profiler: Option<Arc<Mutex<CpuUsageProfiler>>>,
     fps_profiler: Option<Arc<Mutex<FpsProfiler>>>,
     worker: Option<AggregationWorker>,
     registry: ProfilerRegistry,
@@ -36,6 +38,7 @@ impl PerfDroidRuntime {
             inner: Arc::new(Mutex::new(RuntimeInner {
                 state: SessionState::Disconnected,
                 cpu_clock_profiler: None,
+                cpu_usage_profiler: None,
                 fps_profiler: None,
                 worker: None,
                 registry: ProfilerRegistry::default(),
@@ -207,6 +210,13 @@ impl PerfDroidRuntime {
         inner.registry.register(cpu_clock_metadata.clone());
         inner.cpu_clock_profiler = Some(Arc::new(Mutex::new(cpu_clock_profiler)));
 
+        let mut cpu_usage_profiler =
+            CpuUsageProfiler::new(serial_arg.map(str::to_string), Duration::from_millis(100))?;
+        cpu_usage_profiler.connect()?;
+        let cpu_usage_metadata = cpu_usage_profiler.metadata_clone();
+        inner.registry.register(cpu_usage_metadata.clone());
+        inner.cpu_usage_profiler = Some(Arc::new(Mutex::new(cpu_usage_profiler)));
+
         let fps_profiler = match FpsProfiler::new(
             serial_arg.map(str::to_string),
             Duration::from_secs(1),
@@ -250,6 +260,18 @@ impl PerfDroidRuntime {
                     .collect::<Vec<_>>()
                     .join(", ")
             )));
+        let _ = self
+            .event_tx
+            .send(AggregatorEvent::MetadataRegistered(format!(
+                "{} [{}]",
+                cpu_usage_metadata.profiler_key,
+                cpu_usage_metadata
+                    .ordered_collectors()
+                    .iter()
+                    .map(|collector| collector.collector_key.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
         if let Some((_, metadata)) = fps_profiler {
             let _ = self
                 .event_tx
@@ -285,12 +307,19 @@ impl PerfDroidRuntime {
         inner.selected_hz = hz.clamp(1, 10);
 
         let cpu_clock_profiler = inner.cpu_clock_profiler.clone();
+        let cpu_usage_profiler = inner.cpu_usage_profiler.clone();
         let fps_profiler = inner.fps_profiler.clone();
 
         if let Some(profiler) = cpu_clock_profiler.as_ref() {
             profiler
                 .lock()
                 .map_err(|_| CoreError::Runtime("CPU_CLOCK profiler lock poisoned".to_string()))?
+                .start()?;
+        }
+        if let Some(profiler) = cpu_usage_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("CPU_USAGE profiler lock poisoned".to_string()))?
                 .start()?;
         }
         if let Some(profiler) = fps_profiler.as_ref() {
@@ -303,6 +332,7 @@ impl PerfDroidRuntime {
         inner.worker = Some(
             AggregationWorker::spawn(
                 cpu_clock_profiler,
+                cpu_usage_profiler,
                 fps_profiler,
                 inner.selected_hz,
                 self.event_tx.clone(),
@@ -332,6 +362,12 @@ impl PerfDroidRuntime {
                 .map_err(|_| CoreError::Runtime("CPU_CLOCK profiler lock poisoned".to_string()))?
                 .pause()?;
         }
+        if let Some(profiler) = inner.cpu_usage_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("CPU_USAGE profiler lock poisoned".to_string()))?
+                .pause()?;
+        }
         if let Some(profiler) = inner.fps_profiler.as_ref() {
             profiler
                 .lock()
@@ -359,6 +395,12 @@ impl PerfDroidRuntime {
             profiler
                 .lock()
                 .map_err(|_| CoreError::Runtime("CPU_CLOCK profiler lock poisoned".to_string()))?
+                .restart()?;
+        }
+        if let Some(profiler) = inner.cpu_usage_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("CPU_USAGE profiler lock poisoned".to_string()))?
                 .restart()?;
         }
         if let Some(profiler) = inner.fps_profiler.as_ref() {
@@ -395,6 +437,12 @@ impl PerfDroidRuntime {
                 .map_err(|_| CoreError::Runtime("CPU_CLOCK profiler lock poisoned".to_string()))?
                 .stop()?;
         }
+        if let Some(profiler) = inner.cpu_usage_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("CPU_USAGE profiler lock poisoned".to_string()))?
+                .stop()?;
+        }
         if let Some(profiler) = inner.fps_profiler.as_ref() {
             profiler
                 .lock()
@@ -402,6 +450,7 @@ impl PerfDroidRuntime {
                 .stop()?;
         }
         inner.cpu_clock_profiler = None;
+        inner.cpu_usage_profiler = None;
         inner.fps_profiler = None;
         inner.state = SessionState::Stopped;
         let _ = self
