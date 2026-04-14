@@ -9,6 +9,7 @@ use gpui::{
     SharedString, Styled, Subscription, Window, WindowBounds, WindowOptions, div, px, rgb, size,
     transparent_black,
 };
+use pdcore::types::ControlCommand;
 use gpui_component::Root;
 use gpui_component::StyledExt;
 use gpui_component::button::{Button, ButtonVariants};
@@ -28,8 +29,8 @@ const WINDOW_WIDTH: f32 = 1440.0;
 const WINDOW_HEIGHT: f32 = 960.0;
 const CHART_HEIGHT: f32 = 250.0;
 const Y_AXIS_WIDTH: f32 = 72.0;
-const APP_PADDING_X: f32 = 40.0;
-const CHART_SECTION_PADDING_X: f32 = 32.0;
+const APP_PADDING_X: f32 = 48.0;
+const CHART_SECTION_PADDING_X: f32 = 40.0;
 const LINE_COLORS: [u32; 10] = [
     0x2563EB, 0xF97316, 0x10B981, 0xDB2777, 0x7C3AED, 0x0F766E, 0xDC2626, 0xCA8A04, 0x4F46E5,
     0x0891B2,
@@ -75,7 +76,6 @@ struct PerfDroidDemo {
     device: Option<DeviceDescriptor>,
     detected_devices: Vec<AdbDetectedDevice>,
     status_line: String,
-    metadata_lines: Vec<String>,
     selected_hz: u64,
     package_name: String,
     package_input: Entity<InputState>,
@@ -131,7 +131,6 @@ impl PerfDroidDemo {
             device: None,
             detected_devices: Vec::new(),
             status_line: "Waiting for Connect.".to_string(),
-            metadata_lines: vec!["No profiler metadata registered.".to_string()],
             selected_hz: 4,
             package_name: initial_package_name,
             package_input,
@@ -157,15 +156,7 @@ impl PerfDroidDemo {
                 AggregatorEvent::DeviceDiscoveryUpdated(devices) => {
                     self.detected_devices = devices;
                 }
-                AggregatorEvent::MetadataRegistered(metadata) => {
-                    if self.metadata_lines.len() == 1
-                        && self.metadata_lines[0] == "No profiler metadata registered."
-                    {
-                        self.metadata_lines = vec![metadata];
-                    } else if !self.metadata_lines.contains(&metadata) {
-                        self.metadata_lines.push(metadata);
-                    }
-                }
+                AggregatorEvent::MetadataRegistered(_) => {}
                 AggregatorEvent::MetricBatch(batch) => {
                     self.session.push(batch);
                 }
@@ -369,10 +360,14 @@ impl PerfDroidDemo {
         div()
             .flex()
             .flex_col()
-            .gap_2()
+            .gap_1()
             .items_start()
             .child(form_label("Sampling Rate (1-10 Hz)"))
             .child(Input::new(&self.hz_input).cleanable(true))
+            .child(helper_text(format!(
+                "Selected sampling rate: {} Hz",
+                self.selected_hz
+            )))
             .child(helper_text("Allowed range: 1-10 Hz"))
     }
 
@@ -407,46 +402,41 @@ impl PerfDroidDemo {
             div()
                 .flex()
                 .flex_col()
-                .gap_2()
-                .children(lines.into_iter().map(info_row))
-                .child(form_label("Metadata"))
-                .child(
-                    div()
-                        .w_full()
-                        .p_2()
-                        .rounded_md()
-                        .bg(rgb(0xF7EEE0))
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .children(self.metadata_lines.iter().cloned().map(|line| {
-                            div().w_full().whitespace_normal().child(line)
-                        })),
-                ),
+                .gap_3()
+                .children(lines.into_iter().map(info_row)),
             panel_width,
         )
     }
 
     fn render_control_part(&self, panel_width: f32) -> impl IntoElement {
+        let can_start = self.state.allows(ControlCommand::Start);
+        let can_pause = self.state.allows(ControlCommand::Pause);
+        let can_restart = self.state.allows(ControlCommand::Restart);
+        let can_stop = self.state.allows(ControlCommand::Stop);
+
         let runtime = Arc::clone(&self.runtime);
         let start = Button::new("start")
             .label(format!("Start {}Hz", self.selected_hz))
-            .on_click(move |_, _, _| runtime.request_start(runtime.selected_hz()));
+            .on_click(move |_, _, _| runtime.request_start(runtime.selected_hz()))
+            .disabled(!can_start);
 
         let runtime = Arc::clone(&self.runtime);
         let pause = Button::new("pause")
             .label("Pause")
-            .on_click(move |_, _, _| runtime.request_pause());
+            .on_click(move |_, _, _| runtime.request_pause())
+            .disabled(!can_pause);
 
         let runtime = Arc::clone(&self.runtime);
         let restart = Button::new("continue")
             .label("Continue")
-            .on_click(move |_, _, _| runtime.request_restart());
+            .on_click(move |_, _, _| runtime.request_restart())
+            .disabled(!can_restart);
 
         let runtime = Arc::clone(&self.runtime);
         let stop = Button::new("stop")
             .label("Stop")
-            .on_click(move |_, _, _| runtime.request_stop());
+            .on_click(move |_, _, _| runtime.request_stop())
+            .disabled(!can_stop);
 
         let export_allowed = self.can_export_csv();
         let export_state = self.state;
@@ -509,7 +499,7 @@ impl PerfDroidDemo {
             div()
                 .flex()
                 .flex_col()
-                .gap_3()
+                .gap_4()
                 .child(
                     div()
                         .flex()
@@ -519,21 +509,29 @@ impl PerfDroidDemo {
                         .child(form_label("Session State"))
                         .child(status_pill(self.state.as_str())),
                 )
-                .child(form_label("Target Package For FPS"))
-                .child(Input::new(&self.package_input).cleanable(true))
-                .child(helper_text(format!(
-                    "Current package: {}",
-                    if self.package_name.trim().is_empty() {
-                        "--"
-                    } else {
-                        self.package_name.as_str()
-                    }
-                )))
-                .child(helper_text(format!(
-                    "Selected sampling rate: {} Hz",
-                    self.selected_hz
-                )))
-                .child(self.render_hz_input())
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(form_label("Target Package For FPS"))
+                        .child(Input::new(&self.package_input).cleanable(true))
+                        .child(helper_text(format!(
+                            "Current package: {}",
+                            if self.package_name.trim().is_empty() {
+                                "--"
+                            } else {
+                                self.package_name.as_str()
+                            }
+                        ))),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(self.render_hz_input()),
+                )
                 .child(
                     div()
                         .flex()
@@ -550,9 +548,10 @@ impl PerfDroidDemo {
                 .child(
                     div()
                         .w_full()
-                        .p_2()
+                        .p_3()
                         .rounded_md()
                         .bg(rgb(0xF4ECE0))
+                        .border_1()
                         .child(
                             div()
                                 .w_full()
@@ -561,12 +560,17 @@ impl PerfDroidDemo {
                                 .child(self.status_line.clone()),
                         ),
                 )
+                .child(form_label("Export"))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .items_center()
-                        .gap_1()
+                        .gap_2()
+                        .p_2()
+                        .rounded_md()
+                        .bg(rgb(0xFAF3E8))
+                        .border_1()
                         .child(export_csv)
                         .child(helper_text(
                             "CSV export is only enabled when session state is Paused or Stopped.",
@@ -591,7 +595,7 @@ impl PerfDroidDemo {
             div()
                 .flex()
                 .flex_col()
-                .gap_3()
+                .gap_4()
                 .child(detect)
                 .child(helper_text(
                     "No ADB devices listed yet. Detect devices first, then choose USB or Wireless.",
@@ -603,7 +607,7 @@ impl PerfDroidDemo {
             div()
                 .flex()
                 .flex_col()
-                .gap_3()
+                .gap_4()
                 .child(detect)
                 .child(helper_text(
                     "Wireless connection requires the PC and device to be on the same LAN.",
@@ -620,28 +624,31 @@ impl PerfDroidDemo {
     }
 
     fn render_detected_device_card(&self, device: AdbDetectedDevice) -> impl IntoElement {
+        let can_connect = self.state.allows(ControlCommand::Connect);
         let serial_id = stable_u64(&device.serial);
         let usb_runtime = Arc::clone(&self.runtime);
         let usb_serial = device.serial.clone();
         let connect_usb = Button::new(("usb", serial_id))
             .label("Wired")
-            .on_click(move |_, _, _| usb_runtime.request_connect_usb(usb_serial.clone()));
+            .on_click(move |_, _, _| usb_runtime.request_connect_usb(usb_serial.clone()))
+            .disabled(!can_connect);
 
         let wifi_runtime = Arc::clone(&self.runtime);
         let wifi_serial = device.serial.clone();
         let connect_wifi = Button::new(("wifi", serial_id))
             .label("Wireless")
-            .on_click(move |_, _, _| wifi_runtime.request_connect_wireless(wifi_serial.clone()));
+            .on_click(move |_, _, _| wifi_runtime.request_connect_wireless(wifi_serial.clone()))
+            .disabled(!can_connect);
 
         div()
             .w_full()
-            .p_3()
+            .p_4()
             .rounded_md()
             .border_1()
             .bg(rgb(0xF7EEE0))
             .flex()
             .flex_col()
-            .gap_2()
+            .gap_3()
             .child(form_label(format!("{} ({})", device.model, device.serial)))
             .child(info_row(format!("ADB state: {}", device.adb_state)))
             .child(info_row(format!(
@@ -684,18 +691,21 @@ impl Render for PerfDroidDemo {
             .p_5()
             .bg(rgb(0xF3EBDD))
             .child(self.render_header())
+            .child(div().h(px(16.0)))
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .flex_wrap()
-                    .gap_3()
+                    .gap_4()
                     .justify_center()
                     .child(self.render_adb_part(panel_width))
                     .child(self.render_device_part(panel_width))
                     .child(self.render_control_part(panel_width)),
             )
+            .child(div().h(px(20.0)))
             .child(chart_section(self.render_cpu_clock_chart(chart_width)))
+            .child(div().h(px(12.0)))
             .child(chart_section(self.render_fps_chart(chart_width)))
     }
 }
@@ -729,10 +739,10 @@ fn section_card(
     div()
         .flex()
         .flex_col()
-        .gap_3()
+        .gap_4()
         .w(px(panel_width))
-        .min_h(px(220.0))
-        .p_4()
+        .min_h(px(240.0))
+        .p_5()
         .rounded_lg()
         .border_1()
         .bg(rgb(0xFFF9F1))
@@ -745,9 +755,9 @@ fn metric_card(label: impl Into<String>, value: impl Into<String>) -> impl IntoE
         .flex()
         .flex_col()
         .items_center()
-        .gap_1()
-        .min_w(px(132.0))
-        .p_3()
+        .gap_2()
+        .min_w(px(140.0))
+        .p_4()
         .rounded_md()
         .border_1()
         .bg(rgb(0xF7EEE0))
@@ -807,7 +817,7 @@ fn form_label(label: impl Into<String>) -> impl IntoElement {
 }
 
 fn helper_text(text: impl Into<String>) -> impl IntoElement {
-    div().child(text.into())
+    div().text_sm().whitespace_normal().child(text.into())
 }
 
 fn info_row(text: impl Into<String>) -> impl IntoElement {
@@ -816,6 +826,7 @@ fn info_row(text: impl Into<String>) -> impl IntoElement {
         .p_2()
         .rounded_md()
         .bg(rgb(0xF7EEE0))
+        .border_1()
         .child(text.into())
 }
 
