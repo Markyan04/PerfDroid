@@ -4150,6 +4150,9 @@ dependencies = [
 [[package]]
 name = "pdcore"
 version = "0.1.0"
+dependencies = [
+ "adb_client",
+]
 
 [[package]]
 name = "pem"

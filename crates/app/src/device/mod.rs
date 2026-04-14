@@ -1,4 +1,5 @@
-use adb_client::{ADBDeviceExt, server::ADBServer};
+use adb_client::ADBDeviceExt;
+use pdcore::adb::{workspace_adb_path, workspace_adb_server};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -38,7 +39,7 @@ pub struct AdbDetectedDevice {
 }
 
 pub fn query_device_descriptor(serial: Option<&str>) -> Result<DeviceDescriptor, String> {
-    let mut server = ADBServer::default();
+    let mut server = workspace_adb_server();
     let target_serial = serial.unwrap_or("default").to_string();
     let mut device = match serial {
         Some(serial) => server
@@ -291,10 +292,17 @@ mod tests {
 }
 
 fn run_adb(args: &[&str]) -> Result<String, String> {
-    let output = Command::new("adb")
+    let adb_path = workspace_adb_path();
+    let output = Command::new(&adb_path)
         .args(args)
         .output()
-        .map_err(|err| format!("failed to launch `adb {}`: {err}", args.join(" ")))?;
+        .map_err(|err| {
+            format!(
+                "failed to launch `{}` for `adb {}`: {err}",
+                adb_path.display(),
+                args.join(" ")
+            )
+        })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();

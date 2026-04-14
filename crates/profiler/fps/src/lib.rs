@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use adb_client::{ADBDeviceExt, server::ADBServer, server_device::ADBServerDevice};
 use pdcore::traits::{Collector, Profiler};
 use pdcore::types::{CollectorMetadata, ProfilerMetadata};
+use pdcore::adb::workspace_adb_server;
 use pdcore::{CoreError, INVALID_METRIC_VALUE};
 
 use crate::metadata::{COLLECTOR_KEY, PROFILER_KEY, UNIT_FPS};
@@ -120,7 +121,7 @@ impl Profiler for FpsProfiler {
     }
 
     fn connect(&mut self) -> Result<(), CoreError> {
-        let mut server = ADBServer::default();
+        let mut server = workspace_adb_server();
         let mut device = open_target_device(&mut server, self.serial.as_deref())?;
         let _ = run_shell(&mut device, TIMESTATS_ENABLE_COMMAND)?;
         self.connected = true;
@@ -135,7 +136,7 @@ impl Profiler for FpsProfiler {
             return Ok(());
         }
 
-        let mut server = ADBServer::default();
+        let mut server = workspace_adb_server();
         let mut device = open_target_device(&mut server, self.serial.as_deref())?;
         let (stop_tx, stop_rx) = mpsc::channel();
         let pause_flag = Arc::new(AtomicBool::new(false));

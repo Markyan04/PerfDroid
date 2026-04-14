@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use adb_client::{ADBDeviceExt, server::ADBServer, server_device::ADBServerDevice};
 use pdcore::CoreError;
 use pdcore::INVALID_METRIC_VALUE;
+use pdcore::adb::workspace_adb_server;
 use pdcore::traits::{Collector, Profiler};
 use pdcore::types::{CollectorMetadata, ProfilerMetadata};
 
@@ -92,7 +93,7 @@ impl CpuClockProfiler {
     }
 
     pub fn discover_policies(&mut self) -> Result<Vec<CpuPolicy>, CoreError> {
-        let mut server = ADBServer::default();
+        let mut server = workspace_adb_server();
         let mut device = open_target_device(&mut server, self.serial.as_deref())?;
         let output = run_shell(&mut device, POLICY_DISCOVERY_COMMAND)?;
         let policies = parse_policy_listing(&output);
@@ -177,7 +178,7 @@ impl Profiler for CpuClockProfiler {
             return Ok(());
         }
 
-        let mut server = ADBServer::default();
+        let mut server = workspace_adb_server();
         let mut device = open_target_device(&mut server, self.serial.as_deref())?;
         let policy_names = self
             .collectors
