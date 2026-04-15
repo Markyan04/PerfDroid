@@ -99,12 +99,6 @@ just package-macos
 just package-windows
 ```
 
-一键打全部平台：
-
-```bash
-just package-all
-```
-
 产物默认输出在 `dist/` 目录，命名示例：
 
 - `perfdroid-0.1.0-linux-x86_64.tar.gz`
