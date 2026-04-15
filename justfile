@@ -1,4 +1,5 @@
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
 app_name := "perfdroid"
 app_crate := "app"
@@ -38,10 +39,10 @@ install-targets:
 
 # Internal helpers
 prepare-dist:
-    mkdir -p dist
+    {{ if os_family() == "windows" { "if (-not (Test-Path 'dist')) { New-Item -ItemType Directory -Path 'dist' | Out-Null }" } else { "mkdir -p dist" } }}
 
 clean-dist:
-    rm -rf dist
+    {{ if os_family() == "windows" { "if (Test-Path 'dist') { Remove-Item -LiteralPath 'dist' -Recurse -Force }" } else { "rm -rf dist" } }}
 
 # Package for Linux, includes adb/linux/adb in release
 package-linux: prepare-dist
@@ -67,15 +68,7 @@ package-macos: prepare-dist
 
 # Package for Windows, includes adb/win binaries in release
 package-windows: prepare-dist
-    pkg_dir="dist/{{app_name}}-{{version}}-windows-x86_64"; \
-    rm -rf "$pkg_dir" "dist/{{app_name}}-{{version}}-windows-x86_64.zip"; \
-    cargo build --release -p {{app_crate}} --target x86_64-pc-windows-gnu; \
-    mkdir -p "$pkg_dir/adb"; \
-    cp target/x86_64-pc-windows-gnu/release/{{app_crate}}.exe "$pkg_dir/{{app_name}}.exe"; \
-    cp adb/win/adb.exe "$pkg_dir/adb/adb.exe"; \
-    cp adb/win/AdbWinApi.dll "$pkg_dir/adb/AdbWinApi.dll"; \
-    cp adb/win/AdbWinUsbApi.dll "$pkg_dir/adb/AdbWinUsbApi.dll"; \
-    (cd dist && zip -r "{{app_name}}-{{version}}-windows-x86_64.zip" "{{app_name}}-{{version}}-windows-x86_64")
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File '.\scripts\package-windows.ps1' -AppName '{{app_name}}' -Version '{{version}}' -AppCrate '{{app_crate}}'
 
 # Build all platform packages (requires all targets/toolchains available)
 package-all: clean-dist package-linux package-macos package-windows
