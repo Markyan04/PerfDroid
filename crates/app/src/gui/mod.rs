@@ -5,17 +5,20 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 
 use gpui::{
-    App, AppContext, Application, Bounds, Context, Entity, IntoElement, ParentElement, Render,
-    SharedString, Styled, Subscription, Window, WindowBounds, WindowOptions, div, px, rgb, size,
-    transparent_black,
+    App, AppContext, Application, Bounds, Context, Entity, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, Styled, Subscription, Window, WindowBounds,
+    WindowOptions, div, hsla, px, rgb, size, transparent_black,
 };
 use gpui_component::Disableable;
 use gpui_component::Root;
+use gpui_component::Sizable;
+use gpui_component::Size as ComponentSize;
 use gpui_component::StyledExt;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::chart::{AreaChart, LineChart};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
+use gpui_component::spinner::Spinner;
 use pdcore::types::ControlCommand;
 
 use crate::aggregation::AggregatorEvent;
@@ -76,6 +79,8 @@ struct PerfDroidDemo {
     device: Option<DeviceDescriptor>,
     detected_devices: Vec<AdbDetectedDevice>,
     status_line: String,
+    is_busy: bool,
+    busy_message: String,
     selected_hz: u64,
     package_name: String,
     package_input: Entity<InputState>,
@@ -131,6 +136,8 @@ impl PerfDroidDemo {
             device: None,
             detected_devices: Vec::new(),
             status_line: "Waiting for Connect.".to_string(),
+            is_busy: false,
+            busy_message: String::new(),
             selected_hz: 4,
             package_name: initial_package_name,
             package_input,
@@ -143,6 +150,10 @@ impl PerfDroidDemo {
     fn drain_events(&mut self) {
         while let Ok(event) = self.rx.try_recv() {
             match event {
+                AggregatorEvent::BusyStateChanged(is_busy, message) => {
+                    self.is_busy = is_busy;
+                    self.busy_message = message;
+                }
                 AggregatorEvent::StateChanged(state) => {
                     self.state = state;
                     if state == SessionState::Connected {
@@ -485,7 +496,11 @@ impl PerfDroidDemo {
             .gap_1()
             .items_start()
             .child(form_label("Sampling Rate (1-10 Hz)"))
-            .child(Input::new(&self.hz_input).cleanable(true))
+            .child(
+                Input::new(&self.hz_input)
+                    .cleanable(true)
+                    .disabled(self.is_busy),
+            )
             .child(helper_text(format!(
                 "Selected sampling rate: {} Hz",
                 self.selected_hz
@@ -533,10 +548,10 @@ impl PerfDroidDemo {
     }
 
     fn render_control_part(&self, panel_width: f32) -> impl IntoElement {
-        let can_start = self.state.allows(ControlCommand::Start);
-        let can_pause = self.state.allows(ControlCommand::Pause);
-        let can_restart = self.state.allows(ControlCommand::Restart);
-        let can_stop = self.state.allows(ControlCommand::Stop);
+        let can_start = !self.is_busy && self.state.allows(ControlCommand::Start);
+        let can_pause = !self.is_busy && self.state.allows(ControlCommand::Pause);
+        let can_restart = !self.is_busy && self.state.allows(ControlCommand::Restart);
+        let can_stop = !self.is_busy && self.state.allows(ControlCommand::Stop);
 
         let runtime = Arc::clone(&self.runtime);
         let start = Button::new("start")
@@ -562,7 +577,7 @@ impl PerfDroidDemo {
             .on_click(move |_, _, _| runtime.request_stop())
             .disabled(!can_stop);
 
-        let export_allowed = self.can_export_csv();
+        let export_allowed = self.can_export_csv() && !self.is_busy;
         let export_state = self.state;
         let export_hz = self.selected_hz;
         let export_session = self.session.clone();
@@ -639,7 +654,11 @@ impl PerfDroidDemo {
                         .flex_col()
                         .gap_2()
                         .child(form_label("Target Package For FPS"))
-                        .child(Input::new(&self.package_input).cleanable(true))
+                        .child(
+                            Input::new(&self.package_input)
+                                .cleanable(true)
+                                .disabled(self.is_busy),
+                        )
                         .child(helper_text(format!(
                             "Current package: {}",
                             if self.package_name.trim().is_empty() {
@@ -713,7 +732,8 @@ impl PerfDroidDemo {
         let detect = Button::new("detect-devices")
             .primary()
             .label("Detect USB Devices")
-            .on_click(move |_, _, _| runtime.request_refresh_devices());
+            .on_click(move |_, _, _| runtime.request_refresh_devices())
+            .disabled(self.is_busy);
 
         let content = if self.detected_devices.is_empty() {
             div()
@@ -748,7 +768,7 @@ impl PerfDroidDemo {
     }
 
     fn render_detected_device_card(&self, device: AdbDetectedDevice) -> impl IntoElement {
-        let can_connect = self.state.allows(ControlCommand::Connect);
+        let can_connect = !self.is_busy && self.state.allows(ControlCommand::Connect);
         let serial_id = stable_u64(&device.serial);
         let usb_runtime = Arc::clone(&self.runtime);
         let usb_serial = device.serial.clone();
@@ -789,6 +809,58 @@ impl PerfDroidDemo {
                     .child(connect_wifi),
             )
     }
+
+    fn render_connection_overlay(&self) -> impl IntoElement {
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .occlude()
+            .flex()
+            .justify_center()
+            .items_center()
+            .bg(hsla(0.0, 0.0, 0.0, 0.38))
+            .child(
+                div()
+                    .w(px(320.0))
+                    .p_6()
+                    .rounded_lg()
+                    .border_1()
+                    .bg(rgb(0xFFF9F1))
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        Spinner::new()
+                            .with_size(ComponentSize::Large)
+                            .color(hsla(0.07, 0.75, 0.45, 1.0)),
+                    )
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_semibold()
+                            .text_center()
+                            .child("Working"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_center()
+                            .whitespace_normal()
+                            .child(if self.busy_message.trim().is_empty() {
+                                "Please wait while PerfDroid finishes the current device operation."
+                                    .to_string()
+                            } else {
+                                self.busy_message.clone()
+                            }),
+                    )
+                    .child(helper_text("Other page actions are temporarily disabled.")),
+            )
+    }
 }
 
 impl Render for PerfDroidDemo {
@@ -806,33 +878,41 @@ impl Render for PerfDroidDemo {
         };
         let chart_width = (content_width - CHART_SECTION_PADDING_X).max(320.0);
 
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .overflow_y_scrollbar()
-            .gap_5()
-            .p_5()
-            .bg(rgb(0xF3EBDD))
-            .child(self.render_header())
-            .child(div().h(px(16.0)))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap_4()
-                    .justify_center()
-                    .child(self.render_adb_part(panel_width))
-                    .child(self.render_device_part(panel_width))
-                    .child(self.render_control_part(panel_width)),
-            )
-            .child(div().h(px(20.0)))
-            .child(chart_section(self.render_cpu_clock_chart(chart_width)))
-            .child(div().h(px(12.0)))
-            .child(chart_section(self.render_cpu_usage_chart(chart_width)))
-            .child(div().h(px(12.0)))
-            .child(chart_section(self.render_fps_chart(chart_width)))
+        let mut root = div().relative().size_full().child(
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .overflow_y_scrollbar()
+                .gap_5()
+                .p_5()
+                .bg(rgb(0xF3EBDD))
+                .child(self.render_header())
+                .child(div().h(px(16.0)))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap_4()
+                        .justify_center()
+                        .child(self.render_adb_part(panel_width))
+                        .child(self.render_device_part(panel_width))
+                        .child(self.render_control_part(panel_width)),
+                )
+                .child(div().h(px(20.0)))
+                .child(chart_section(self.render_cpu_clock_chart(chart_width)))
+                .child(div().h(px(12.0)))
+                .child(chart_section(self.render_cpu_usage_chart(chart_width)))
+                .child(div().h(px(12.0)))
+                .child(chart_section(self.render_fps_chart(chart_width))),
+        );
+
+        if self.is_busy {
+            root = root.child(self.render_connection_overlay());
+        }
+
+        root
     }
 }
 

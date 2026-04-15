@@ -16,6 +16,7 @@ use crate::storage::TimestampedBatch;
 
 #[derive(Debug, Clone)]
 pub enum AggregatorEvent {
+    BusyStateChanged(bool, String),
     StateChanged(SessionState),
     DeviceUpdated(DeviceDescriptor),
     DeviceDiscoveryUpdated(Vec<AdbDetectedDevice>),

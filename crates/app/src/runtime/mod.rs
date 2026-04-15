@@ -1,5 +1,6 @@
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use pdcore::CoreError;
@@ -24,6 +25,7 @@ pub struct PerfDroidRuntime {
 
 struct RuntimeInner {
     state: SessionState,
+    busy: bool,
     cpu_clock_profiler: Option<Arc<Mutex<CpuClockProfiler>>>,
     cpu_usage_profiler: Option<Arc<Mutex<CpuUsageProfiler>>>,
     fps_profiler: Option<Arc<Mutex<FpsProfiler>>>,
@@ -39,6 +41,7 @@ impl PerfDroidRuntime {
         Self {
             inner: Arc::new(Mutex::new(RuntimeInner {
                 state: SessionState::Disconnected,
+                busy: false,
                 cpu_clock_profiler: None,
                 cpu_usage_profiler: None,
                 fps_profiler: None,
@@ -53,49 +56,84 @@ impl PerfDroidRuntime {
     }
 
     pub fn request_refresh_devices(&self) {
-        match list_adb_devices() {
-            Ok(devices) => {
-                let count = devices.len();
-                let _ = self
-                    .event_tx
-                    .send(AggregatorEvent::DeviceDiscoveryUpdated(devices));
-                let _ = self.event_tx.send(AggregatorEvent::Status(format!(
-                    "USB detection complete: {count} USB-connected device(s) found."
-                )));
-            }
-            Err(err) => {
-                let _ = self.event_tx.send(AggregatorEvent::Status(err));
-            }
+        let runtime = self.clone();
+
+        if let Err(err) = runtime.begin_busy("Detecting USB-connected devices...".to_string()) {
+            let _ = runtime.event_tx.send(AggregatorEvent::Status(err));
+            return;
         }
+
+        thread::spawn(move || {
+            match list_adb_devices() {
+                Ok(devices) => {
+                    let count = devices.len();
+                    let _ = runtime
+                        .event_tx
+                        .send(AggregatorEvent::DeviceDiscoveryUpdated(devices));
+                    let _ = runtime.event_tx.send(AggregatorEvent::Status(format!(
+                        "USB detection complete: {count} USB-connected device(s) found."
+                    )));
+                }
+                Err(err) => {
+                    let _ = runtime.event_tx.send(AggregatorEvent::Status(err));
+                }
+            }
+
+            runtime.finish_busy();
+        });
     }
 
     pub fn request_connect_usb(&self, serial: String) {
-        if let Err(err) = self.connect(serial.clone()) {
-            let _ = self.event_tx.send(AggregatorEvent::Status(err.to_string()));
-        } else {
-            let _ = self.event_tx.send(AggregatorEvent::Status(format!(
-                "Connected to `{serial}` through USB."
-            )));
+        let progress_message = format!("Connecting to `{serial}` via USB...");
+        let runtime = self.clone();
+
+        if let Err(err) = runtime.begin_busy(progress_message) {
+            let _ = runtime.event_tx.send(AggregatorEvent::Status(err));
+            return;
         }
+
+        thread::spawn(move || {
+            if let Err(err) = runtime.connect(serial.clone()) {
+                let _ = runtime.event_tx.send(AggregatorEvent::Status(err.to_string()));
+            } else {
+                let _ = runtime.event_tx.send(AggregatorEvent::Status(format!(
+                    "Connected to `{serial}` through USB."
+                )));
+            }
+
+            runtime.finish_busy();
+        });
     }
 
     pub fn request_connect_wireless(&self, serial: String) {
-        match connect_wireless(&serial) {
-            Ok((wireless_serial, detail)) => {
-                if let Err(err) = self.connect(wireless_serial.clone()) {
-                    let _ = self.event_tx.send(AggregatorEvent::Status(format!(
-                        "{detail} Failed to finish wireless session setup for `{wireless_serial}`: {err}"
-                    )));
-                } else {
-                    let _ = self.event_tx.send(AggregatorEvent::Status(format!(
-                        "{detail} Connected through WiFi as `{wireless_serial}`."
-                    )));
+        let progress_message = format!("Connecting to `{serial}` via WiFi...");
+        let runtime = self.clone();
+
+        if let Err(err) = runtime.begin_busy(progress_message) {
+            let _ = runtime.event_tx.send(AggregatorEvent::Status(err));
+            return;
+        }
+
+        thread::spawn(move || {
+            match connect_wireless(&serial) {
+                Ok((wireless_serial, detail)) => {
+                    if let Err(err) = runtime.connect(wireless_serial.clone()) {
+                        let _ = runtime.event_tx.send(AggregatorEvent::Status(format!(
+                            "{detail} Failed to finish wireless session setup for `{wireless_serial}`: {err}"
+                        )));
+                    } else {
+                        let _ = runtime.event_tx.send(AggregatorEvent::Status(format!(
+                            "{detail} Connected through WiFi as `{wireless_serial}`."
+                        )));
+                    }
+                }
+                Err(err) => {
+                    let _ = runtime.event_tx.send(AggregatorEvent::Status(err));
                 }
             }
-            Err(err) => {
-                let _ = self.event_tx.send(AggregatorEvent::Status(err));
-            }
-        }
+
+            runtime.finish_busy();
+        });
     }
 
     pub fn request_connect(&self, serial: Option<String>) {
@@ -187,6 +225,35 @@ impl PerfDroidRuntime {
             .lock()
             .map(|inner| inner.state)
             .unwrap_or(SessionState::Disconnected)
+    }
+
+    fn begin_busy(&self, message: String) -> Result<(), String> {
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "runtime lock poisoned".to_string())?;
+
+        if inner.busy {
+            return Err("A device operation is already in progress.".to_string());
+        }
+
+        inner.busy = true;
+        drop(inner);
+
+        let _ = self
+            .event_tx
+            .send(AggregatorEvent::BusyStateChanged(true, message));
+        Ok(())
+    }
+
+    fn finish_busy(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.busy = false;
+        }
+
+        let _ = self
+            .event_tx
+            .send(AggregatorEvent::BusyStateChanged(false, String::new()));
     }
 
     fn connect(&self, serial: String) -> Result<(), CoreError> {
