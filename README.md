@@ -101,12 +101,6 @@ just package-macos
 just package-windows
 ```
 
-Package all platforms:
-
-```bash
-just package-all
-```
-
 Artifacts are generated under `dist/`, for example:
 
 - `perfdroid-0.1.0-linux-x86_64.tar.gz`
