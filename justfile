@@ -46,14 +46,7 @@ clean-dist:
 
 # Package for Linux, includes adb/linux/adb in release
 package-linux: prepare-dist
-    pkg_dir="dist/{{app_name}}-{{version}}-linux-x86_64"; \
-    rm -rf "$pkg_dir" "dist/{{app_name}}-{{version}}-linux-x86_64.tar.gz"; \
-    cargo build --release -p {{app_crate}} --target x86_64-unknown-linux-gnu; \
-    mkdir -p "$pkg_dir/adb"; \
-    cp target/x86_64-unknown-linux-gnu/release/{{app_crate}} "$pkg_dir/{{app_name}}"; \
-    cp adb/linux/adb "$pkg_dir/adb/adb"; \
-    chmod +x "$pkg_dir/{{app_name}}" "$pkg_dir/adb/adb"; \
-    tar -C dist -czf "dist/{{app_name}}-{{version}}-linux-x86_64.tar.gz" "{{app_name}}-{{version}}-linux-x86_64"
+    ./scripts/package-linux.sh '{{app_name}}' '{{version}}' '{{app_crate}}'
 
 # Package for macOS, includes adb/mac/adb in release
 package-macos: prepare-dist
