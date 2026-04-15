@@ -89,12 +89,16 @@ pub fn list_adb_devices() -> Result<Vec<AdbDetectedDevice>, String> {
             .unwrap_or("Unknown")
             .replace('_', " ");
 
-        devices.push(AdbDetectedDevice {
+        let detected = AdbDetectedDevice {
             serial: serial.to_string(),
             connection: infer_connection_kind(serial),
             adb_state,
             model,
-        });
+        };
+
+        if detected.connection == ConnectionKind::Usb {
+            devices.push(detected);
+        }
     }
 
     Ok(devices)
@@ -102,14 +106,21 @@ pub fn list_adb_devices() -> Result<Vec<AdbDetectedDevice>, String> {
 
 pub fn connect_wireless(serial: &str) -> Result<(String, String), String> {
     if serial.contains(':') {
+        let connect_output = connect_wireless_with_retry(serial)?;
         return Ok((
             serial.to_string(),
-            format!("Wireless device `{serial}` is already reachable through ADB over WiFi."),
+            format!(
+                "Wireless device `{serial}` is reachable through ADB over WiFi. {}",
+                connect_output.trim()
+            )
+            .trim()
+            .to_string(),
         ));
     }
 
     let ip_address = query_wireless_ip(serial)?;
     let tcpip_output = run_adb(&["-s", serial, "tcpip", "5555"])?;
+    thread::sleep(Duration::from_millis(1_200));
     let wifi_serial = format!("{ip_address}:5555");
     let connect_output = connect_wireless_with_retry(&wifi_serial)?;
     let message = format!(
@@ -150,41 +161,86 @@ fn infer_connection_kind(serial: &str) -> ConnectionKind {
 }
 
 fn query_wireless_ip(serial: &str) -> Result<String, String> {
-    let route = run_adb(&["-s", serial, "shell", "ip", "route"])?;
-    if let Some(address) = extract_route_src_ip(&route) {
+    let mut failures = Vec::new();
+
+    if let Some(address) = query_wireless_ip_from_command(
+        serial,
+        &["shell", "ip", "-f", "inet", "-o", "addr", "show", "up", "scope", "global"],
+        extract_preferred_wireless_inet_ip,
+        &mut failures,
+    ) {
         return Ok(address);
     }
 
-    let addresses = run_adb(&[
-        "-s", serial, "shell", "ip", "-f", "inet", "-o", "addr", "show", "up", "scope", "global",
-    ])?;
-    if let Some(address) = extract_inet_ip(&addresses) {
+    if let Some(address) = query_wireless_ip_from_command(
+        serial,
+        &["shell", "ip", "-f", "inet", "addr", "show", "wlan0"],
+        extract_inet_ip,
+        &mut failures,
+    ) {
         return Ok(address);
     }
 
-    let wlan0 = run_adb(&[
-        "-s", serial, "shell", "ip", "-f", "inet", "addr", "show", "wlan0",
-    ])?;
-    if let Some(address) = extract_inet_ip(&wlan0) {
+    if let Some(address) = query_wireless_ip_from_command(
+        serial,
+        &["shell", "ip", "-f", "inet", "addr", "show", "wlan1"],
+        extract_inet_ip,
+        &mut failures,
+    ) {
         return Ok(address);
+    }
+
+    if let Some(address) = query_wireless_ip_from_command(
+        serial,
+        &["shell", "ip", "-f", "inet", "addr", "show", "wifi0"],
+        extract_inet_ip,
+        &mut failures,
+    ) {
+        return Ok(address);
+    }
+
+    if let Some(address) = query_wireless_ip_from_command(
+        serial,
+        &["shell", "ip", "route"],
+        extract_wireless_route_src_ip,
+        &mut failures,
+    ) {
+        return Ok(address);
+    }
+
+    for property in ["dhcp.wlan0.ipaddress", "dhcp.wlan1.ipaddress", "dhcp.eth0.ipaddress"] {
+        let command = ["shell", "getprop", property];
+        if let Some(address) =
+            query_wireless_ip_from_command(serial, &command, extract_first_ipv4, &mut failures)
+        {
+            return Ok(address);
+        }
     }
 
     Err(format!(
-        "failed to determine WiFi IP for `{serial}` before enabling wireless ADB. Ensure the device is still visible in `adb devices`, WiFi is enabled, and the phone is on the same LAN as this computer."
+        "failed to determine WiFi IP for `{serial}` before enabling wireless ADB. Ensure the device is still visible in `adb devices`, WiFi is enabled, and the phone is on the same LAN as this computer. Attempts: {}",
+        failures.join(" | ")
     ))
 }
 
 fn connect_wireless_with_retry(wifi_serial: &str) -> Result<String, String> {
-    const CONNECT_RETRIES: usize = 5;
-    const CONNECT_RETRY_DELAY_MS: u64 = 300;
+    const CONNECT_RETRIES: usize = 8;
+    const CONNECT_RETRY_DELAY_MS: u64 = 900;
     let mut last_message = String::new();
 
     for attempt in 0..CONNECT_RETRIES {
+        let _ = run_adb(&["disconnect", wifi_serial]);
+
         match run_adb(&["connect", wifi_serial]) {
             Ok(output) => {
                 last_message = output;
                 if is_adb_connect_success(&last_message) {
-                    return Ok(last_message);
+                    match probe_wireless_transport_ready(wifi_serial) {
+                        Ok(()) => return Ok(last_message),
+                        Err(err) => {
+                            last_message = format!("{}; {}", last_message.trim(), err);
+                        }
+                    }
                 }
             }
             Err(err) => {
@@ -200,6 +256,71 @@ fn connect_wireless_with_retry(wifi_serial: &str) -> Result<String, String> {
     Err(format!(
         "failed to connect to `{wifi_serial}` after {CONNECT_RETRIES} attempts: {last_message}"
     ))
+}
+
+fn probe_wireless_transport_ready(serial: &str) -> Result<(), String> {
+    const READY_RETRIES: usize = 12;
+    const READY_RETRY_DELAY_MS: u64 = 350;
+    let mut last_message = String::new();
+
+    for attempt in 0..READY_RETRIES {
+        match adb_target_state(serial) {
+            Ok(state) if state == "device" => match query_device_descriptor(Some(serial)) {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    last_message = format!(
+                        "wireless ADB state is `device` but the Rust ADB client cannot open `{serial}` yet: {err}"
+                    );
+                }
+            },
+            Ok(state) => {
+                last_message = format!(
+                    "ADB reported `{serial}` as `{state}` after connecting"
+                );
+            }
+            Err(err) => last_message = err,
+        }
+
+        if attempt + 1 < READY_RETRIES {
+            thread::sleep(Duration::from_millis(READY_RETRY_DELAY_MS));
+        }
+    }
+
+    Err(format!("{last_message}; the wireless transport did not become ready in time"))
+}
+
+fn adb_target_state(serial: &str) -> Result<String, String> {
+    let output = run_adb(&["-s", serial, "get-state"])?;
+    Ok(output.trim().to_string())
+}
+
+fn query_wireless_ip_from_command(
+    serial: &str,
+    command: &[&str],
+    parser: fn(&str) -> Option<String>,
+    failures: &mut Vec<String>,
+) -> Option<String> {
+    let mut adb_args = Vec::with_capacity(command.len() + 2);
+    adb_args.push("-s");
+    adb_args.push(serial);
+    adb_args.extend_from_slice(command);
+
+    match run_adb(&adb_args) {
+        Ok(output) => match parser(&output) {
+            Some(address) => Some(address),
+            None => {
+                failures.push(format!(
+                    "`adb {}` did not expose a usable IPv4 address",
+                    adb_args.join(" ")
+                ));
+                None
+            }
+        },
+        Err(err) => {
+            failures.push(err);
+            None
+        }
+    }
 }
 
 fn is_ipv4_address(value: &str) -> bool {
@@ -220,6 +341,7 @@ fn parse_ipv4_address(value: &str) -> Option<[u8; 4]> {
     Some([octets[0], octets[1], octets[2], octets[3]])
 }
 
+#[cfg(test)]
 fn extract_route_src_ip(text: &str) -> Option<String> {
     for line in text.lines() {
         let tokens = line.split_whitespace().collect::<Vec<_>>();
@@ -227,6 +349,30 @@ fn extract_route_src_ip(text: &str) -> Option<String> {
             if window[0] == "src" && is_ipv4_address(window[1]) {
                 return Some(window[1].to_string());
             }
+        }
+    }
+
+    None
+}
+
+fn extract_wireless_route_src_ip(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let mut route_interface = None;
+        let mut route_src = None;
+        let tokens = line.split_whitespace().collect::<Vec<_>>();
+
+        for window in tokens.windows(2) {
+            if window[0] == "dev" {
+                route_interface = Some(window[1]);
+            } else if window[0] == "src" && is_ipv4_address(window[1]) {
+                route_src = Some(window[1]);
+            }
+        }
+
+        if let (Some(interface), Some(address)) = (route_interface, route_src)
+            && is_wireless_interface(interface)
+        {
+            return Some(address.to_string());
         }
     }
 
@@ -249,6 +395,46 @@ fn extract_inet_ip(text: &str) -> Option<String> {
     None
 }
 
+fn extract_preferred_wireless_inet_ip(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let tokens = line.split_whitespace().collect::<Vec<_>>();
+        if tokens.len() < 4 {
+            continue;
+        }
+
+        let interface = tokens[1];
+        if !is_wireless_interface(interface) {
+            continue;
+        }
+
+        for window in tokens.windows(2) {
+            if window[0] == "inet" {
+                let candidate = window[1].split('/').next().unwrap_or("");
+                if is_ipv4_address(candidate) {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn extract_first_ipv4(text: &str) -> Option<String> {
+    text.split(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
+        .find(|token| is_ipv4_address(token))
+        .map(str::to_string)
+}
+
+fn is_wireless_interface(interface: &str) -> bool {
+    let normalized = interface.trim_end_matches(':').to_ascii_lowercase();
+    normalized.starts_with("wlan")
+        || normalized.starts_with("wifi")
+        || normalized.starts_with("wl")
+        || normalized.starts_with("ap")
+        || normalized.starts_with("p2p")
+}
+
 fn is_adb_connect_success(output: &str) -> bool {
     let normalized = output.to_ascii_lowercase();
     normalized.contains("connected to") || normalized.contains("already connected to")
@@ -265,9 +451,83 @@ mod tests {
     }
 
     #[test]
+    fn wireless_route_parser_ignores_cellular_and_prefers_wifi() {
+        let route = "\
+default via 10.0.252.217 dev rmnet_data0 proto static src 10.0.252.219
+192.168.1.0/24 dev wlan0 proto kernel scope link src 192.168.1.48";
+        assert_eq!(
+            extract_wireless_route_src_ip(route).as_deref(),
+            Some("192.168.1.48")
+        );
+    }
+
+    #[test]
     fn inet_parser_extracts_host_address() {
         let addr = "3: wlan0    inet 192.168.1.48/24 brd 192.168.1.255 scope global wlan0";
         assert_eq!(extract_inet_ip(addr).as_deref(), Some("192.168.1.48"));
+    }
+
+    #[test]
+    fn preferred_inet_parser_ignores_non_wifi_interfaces() {
+        let addr = "\
+4: rmnet_data0    inet 10.0.252.219/29 brd 10.0.252.223 scope global rmnet_data0
+5: wlan0    inet 192.168.1.48/24 brd 192.168.1.255 scope global wlan0";
+        assert_eq!(
+            extract_preferred_wireless_inet_ip(addr).as_deref(),
+            Some("192.168.1.48")
+        );
+    }
+
+    #[test]
+    fn first_ipv4_parser_handles_property_and_ifconfig_output() {
+        assert_eq!(
+            extract_first_ipv4("192.168.1.48").as_deref(),
+            Some("192.168.1.48")
+        );
+        assert_eq!(
+            extract_first_ipv4("inet addr:192.168.1.48  Bcast:192.168.1.255  Mask:255.255.255.0")
+                .as_deref(),
+            Some("192.168.1.48")
+        );
+    }
+
+    #[test]
+    fn usb_only_device_listing_filters_out_wifi_entries() {
+        let devices = "List of devices attached\n192.168.1.48:5555 device product:demo model:Demo_Phone\nFA79X1A00000 device product:demo model:Demo_Phone\n";
+        let parsed = devices
+            .lines()
+            .skip(1)
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    return None;
+                }
+
+                let mut parts = trimmed.split_whitespace();
+                let serial = parts.next()?;
+                let adb_state = parts.next().unwrap_or("unknown").to_string();
+                let model = trimmed
+                    .split_whitespace()
+                    .find_map(|part| part.strip_prefix("model:"))
+                    .unwrap_or("Unknown")
+                    .replace('_', " ");
+
+                let detected = AdbDetectedDevice {
+                    serial: serial.to_string(),
+                    connection: infer_connection_kind(serial),
+                    adb_state,
+                    model,
+                };
+
+                (detected.connection == ConnectionKind::Usb).then_some(detected)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(
+            parsed[0].serial,
+            "FA79X1A00000"
+        );
     }
 
     #[test]

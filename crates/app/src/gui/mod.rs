@@ -712,7 +712,7 @@ impl PerfDroidDemo {
         let runtime = Arc::clone(&self.runtime);
         let detect = Button::new("detect-devices")
             .primary()
-            .label("Detect ADB Devices")
+            .label("Detect USB Devices")
             .on_click(move |_, _, _| runtime.request_refresh_devices());
 
         let content = if self.detected_devices.is_empty() {
@@ -722,10 +722,10 @@ impl PerfDroidDemo {
                 .gap_4()
                 .child(detect)
                 .child(helper_text(
-                    "No ADB devices listed yet. Detect devices first, then choose USB or Wireless.",
+                    "No USB-connected ADB devices listed yet. Detect devices first, then choose Wired or Wireless.",
                 ))
                 .child(helper_text(
-                    "Wireless connection requires the PC and device to be on the same LAN.",
+                    "Wireless uses the selected USB device to switch ADB onto WiFi. After it connects, the USB cable can be removed.",
                 ))
         } else {
             div()
@@ -734,7 +734,7 @@ impl PerfDroidDemo {
                 .gap_4()
                 .child(detect)
                 .child(helper_text(
-                    "Wireless connection requires the PC and device to be on the same LAN.",
+                    "Wireless uses the selected USB device to switch ADB onto WiFi. After it connects, the USB cable can be removed.",
                 ))
                 .children(
                     self.detected_devices

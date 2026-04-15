@@ -60,7 +60,7 @@ impl PerfDroidRuntime {
                     .event_tx
                     .send(AggregatorEvent::DeviceDiscoveryUpdated(devices));
                 let _ = self.event_tx.send(AggregatorEvent::Status(format!(
-                    "ADB detection complete: {count} device(s) found."
+                    "USB detection complete: {count} USB-connected device(s) found."
                 )));
             }
             Err(err) => {
