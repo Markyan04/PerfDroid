@@ -91,70 +91,69 @@ impl AggregationWorker {
         let pause_flag_for_thread = Arc::clone(&pause_flag);
         let (stop_tx, stop_rx) = mpsc::channel();
 
-        let join_handle = thread::spawn(move || {
-            let mut next_tick = Instant::now();
+        let join_handle =
+            thread::spawn(move || {
+                let mut next_tick = Instant::now();
 
-            loop {
-                if stop_rx.try_recv().is_ok() {
-                    break;
-                }
-
-                if pause_flag_for_thread.load(Ordering::Acquire) {
-                    thread::sleep(Duration::from_millis(20));
-                    continue;
-                }
-
-                if let Some(profiler) = cpu_clock_profiler.as_ref() {
-                    let maybe_batch = profiler
-                        .lock()
-                        .ok()
-                        .and_then(|profiler| CpuClockDataPlane::build_metric_batch(&profiler).ok());
-
-                    if let Some(batch) = maybe_batch {
-                        let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
-                            timestamp_ms: unix_timestamp_ms(),
-                            batch,
-                        }));
+                loop {
+                    if stop_rx.try_recv().is_ok() {
+                        break;
                     }
-                }
 
-                if let Some(profiler) = cpu_usage_profiler.as_ref() {
-                    let maybe_batch = profiler
-                        .lock()
-                        .ok()
-                        .and_then(|profiler| CpuUsageDataPlane::build_metric_batch(&profiler).ok());
-
-                    if let Some(batch) = maybe_batch {
-                        let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
-                            timestamp_ms: unix_timestamp_ms(),
-                            batch,
-                        }));
+                    if pause_flag_for_thread.load(Ordering::Acquire) {
+                        thread::sleep(Duration::from_millis(20));
+                        continue;
                     }
-                }
 
-                if let Some(profiler) = fps_profiler.as_ref() {
-                    let maybe_batch = profiler
-                        .lock()
-                        .ok()
-                        .and_then(|profiler| FpsDataPlane::build_metric_batch(&profiler).ok());
+                    if let Some(profiler) = cpu_clock_profiler.as_ref() {
+                        let maybe_batch = profiler.lock().ok().and_then(|profiler| {
+                            CpuClockDataPlane::build_metric_batch(&profiler).ok()
+                        });
 
-                    if let Some(batch) = maybe_batch {
-                        let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
-                            timestamp_ms: unix_timestamp_ms(),
-                            batch,
-                        }));
+                        if let Some(batch) = maybe_batch {
+                            let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
+                                timestamp_ms: unix_timestamp_ms(),
+                                batch,
+                            }));
+                        }
                     }
-                }
 
-                let now = Instant::now();
-                if next_tick > now {
-                    thread::sleep(next_tick - now);
-                } else {
-                    next_tick = now;
+                    if let Some(profiler) = cpu_usage_profiler.as_ref() {
+                        let maybe_batch = profiler.lock().ok().and_then(|profiler| {
+                            CpuUsageDataPlane::build_metric_batch(&profiler).ok()
+                        });
+
+                        if let Some(batch) = maybe_batch {
+                            let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
+                                timestamp_ms: unix_timestamp_ms(),
+                                batch,
+                            }));
+                        }
+                    }
+
+                    if let Some(profiler) = fps_profiler.as_ref() {
+                        let maybe_batch = profiler
+                            .lock()
+                            .ok()
+                            .and_then(|profiler| FpsDataPlane::build_metric_batch(&profiler).ok());
+
+                        if let Some(batch) = maybe_batch {
+                            let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
+                                timestamp_ms: unix_timestamp_ms(),
+                                batch,
+                            }));
+                        }
+                    }
+
+                    let now = Instant::now();
+                    if next_tick > now {
+                        thread::sleep(next_tick - now);
+                    } else {
+                        next_tick = now;
+                    }
+                    next_tick += interval;
                 }
-                next_tick += interval;
-            }
-        });
+            });
 
         Ok(Self {
             stop_tx,

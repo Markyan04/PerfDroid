@@ -8,9 +8,9 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use adb_client::{ADBDeviceExt, server::ADBServer, server_device::ADBServerDevice};
+use pdcore::adb::workspace_adb_server;
 use pdcore::traits::{Collector, Profiler};
 use pdcore::types::{CollectorMetadata, ProfilerMetadata};
-use pdcore::adb::workspace_adb_server;
 use pdcore::{CoreError, INVALID_METRIC_VALUE};
 
 use crate::metadata::{COLLECTOR_KEY, PROFILER_KEY, UNIT_FPS};

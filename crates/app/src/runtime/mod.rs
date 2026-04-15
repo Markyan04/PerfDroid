@@ -11,7 +11,9 @@ use profiler_fps::FpsProfiler;
 use registry::ProfilerRegistry;
 
 use crate::aggregation::{AggregationWorker, AggregatorEvent};
-use crate::device::{connect_wireless, list_adb_devices, query_device_descriptor, DeviceDescriptor};
+use crate::device::{
+    DeviceDescriptor, connect_wireless, list_adb_devices, query_device_descriptor,
+};
 use crate::session::SessionState;
 
 #[derive(Clone)]

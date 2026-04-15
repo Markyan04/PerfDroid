@@ -156,18 +156,7 @@ fn query_wireless_ip(serial: &str) -> Result<String, String> {
     }
 
     let addresses = run_adb(&[
-        "-s",
-        serial,
-        "shell",
-        "ip",
-        "-f",
-        "inet",
-        "-o",
-        "addr",
-        "show",
-        "up",
-        "scope",
-        "global",
+        "-s", serial, "shell", "ip", "-f", "inet", "-o", "addr", "show", "up", "scope", "global",
     ])?;
     if let Some(address) = extract_inet_ip(&addresses) {
         return Ok(address);
@@ -284,7 +273,9 @@ mod tests {
     #[test]
     fn connect_success_recognizes_adb_connect_messages() {
         assert!(is_adb_connect_success("connected to 192.168.1.48:5555"));
-        assert!(is_adb_connect_success("already connected to 192.168.1.48:5555"));
+        assert!(is_adb_connect_success(
+            "already connected to 192.168.1.48:5555"
+        ));
         assert!(!is_adb_connect_success(
             "failed to connect to 192.168.1.48:5555"
         ));
@@ -293,16 +284,13 @@ mod tests {
 
 fn run_adb(args: &[&str]) -> Result<String, String> {
     let adb_path = workspace_adb_path();
-    let output = Command::new(&adb_path)
-        .args(args)
-        .output()
-        .map_err(|err| {
-            format!(
-                "failed to launch `{}` for `adb {}`: {err}",
-                adb_path.display(),
-                args.join(" ")
-            )
-        })?;
+    let output = Command::new(&adb_path).args(args).output().map_err(|err| {
+        format!(
+            "failed to launch `{}` for `adb {}`: {err}",
+            adb_path.display(),
+            args.join(" ")
+        )
+    })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();

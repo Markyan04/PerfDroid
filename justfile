@@ -35,7 +35,7 @@ clean:
 
 # Optional: install targets needed for cross-platform packaging
 install-targets:
-    rustup target add x86_64-pc-windows-gnu x86_64-unknown-linux-gnu x86_64-apple-darwin
+    rustup target add x86_64-pc-windows-gnu x86_64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin
 
 # Internal helpers
 prepare-dist:
@@ -50,18 +50,8 @@ package-linux: prepare-dist
 
 # Package for macOS, includes adb/mac/adb in release
 package-macos: prepare-dist
-    pkg_dir="dist/{{app_name}}-{{version}}-macos-x86_64"; \
-    rm -rf "$pkg_dir" "dist/{{app_name}}-{{version}}-macos-x86_64.tar.gz"; \
-    cargo build --release -p {{app_crate}} --target x86_64-apple-darwin; \
-    mkdir -p "$pkg_dir/adb"; \
-    cp target/x86_64-apple-darwin/release/{{app_crate}} "$pkg_dir/{{app_name}}"; \
-    cp adb/mac/adb "$pkg_dir/adb/adb"; \
-    chmod +x "$pkg_dir/{{app_name}}" "$pkg_dir/adb/adb"; \
-    tar -C dist -czf "dist/{{app_name}}-{{version}}-macos-x86_64.tar.gz" "{{app_name}}-{{version}}-macos-x86_64"
+    ./scripts/package-macos.sh '{{app_name}}' '{{version}}' '{{app_crate}}'
 
 # Package for Windows, includes adb/win binaries in release
 package-windows: prepare-dist
     powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File '.\scripts\package-windows.ps1' -AppName '{{app_name}}' -Version '{{version}}' -AppCrate '{{app_crate}}'
-
-# Build all platform packages (requires all targets/toolchains available)
-package-all: clean-dist package-linux package-macos package-windows

@@ -87,6 +87,7 @@ fn candidate_roots() -> Vec<PathBuf> {
         && let Some(exe_dir) = exe_path.parent()
     {
         push_ancestors(exe_dir, &mut roots);
+        push_macos_bundle_resource_root(exe_dir, &mut roots);
     }
 
     if let Ok(current_dir) = std::env::current_dir() {
@@ -96,6 +97,29 @@ fn candidate_roots() -> Vec<PathBuf> {
     roots.push(source_workspace_root());
     roots
 }
+
+#[cfg(target_os = "macos")]
+fn push_macos_bundle_resource_root(exe_dir: &Path, roots: &mut Vec<PathBuf>) {
+    let Some(contents_dir) = exe_dir.parent() else {
+        return;
+    };
+
+    if contents_dir.file_name() != Some(std::ffi::OsStr::new("Contents")) {
+        return;
+    }
+
+    if exe_dir.file_name() != Some(std::ffi::OsStr::new("MacOS")) {
+        return;
+    }
+
+    let resources_dir = contents_dir.join("Resources");
+    if !roots.contains(&resources_dir) {
+        roots.push(resources_dir);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn push_macos_bundle_resource_root(_exe_dir: &Path, _roots: &mut Vec<PathBuf>) {}
 
 fn push_ancestors(path: &Path, roots: &mut Vec<PathBuf>) {
     for ancestor in path.ancestors() {
@@ -143,7 +167,10 @@ mod tests {
 
     #[test]
     fn workspace_root_contains_bundled_adb_directory() {
-        assert_eq!(workspace_adb_dir(), workspace_root().join("adb").join(adb_platform_dir()));
+        assert_eq!(
+            workspace_adb_dir(),
+            workspace_root().join("adb").join(adb_platform_dir())
+        );
     }
 
     #[test]

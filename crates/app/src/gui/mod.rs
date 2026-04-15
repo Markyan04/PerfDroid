@@ -1,22 +1,22 @@
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
-use std::{collections::hash_map::DefaultHasher};
 
 use gpui::{
     App, AppContext, Application, Bounds, Context, Entity, IntoElement, ParentElement, Render,
     SharedString, Styled, Subscription, Window, WindowBounds, WindowOptions, div, px, rgb, size,
     transparent_black,
 };
-use pdcore::types::ControlCommand;
+use gpui_component::Disableable;
 use gpui_component::Root;
 use gpui_component::StyledExt;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::chart::{AreaChart, LineChart};
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::scroll::ScrollableElement;
-use gpui_component::Disableable;
+use pdcore::types::ControlCommand;
 
 use crate::aggregation::AggregatorEvent;
 use crate::device::{AdbDetectedDevice, DeviceDescriptor};
@@ -571,50 +571,50 @@ impl PerfDroidDemo {
             .label("Export CSV")
             .on_click(move |_, _, cx| {
                 if !matches!(export_state, SessionState::Paused | SessionState::Stopped) {
-                    export_runtime.request_status(
-                        "CSV export is only available in Paused or Stopped state.",
-                    );
+                    export_runtime
+                        .request_status("CSV export is only available in Paused or Stopped state.");
                     return;
                 }
 
                 let initial_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                let receiver =
-                    cx.prompt_for_new_path(&initial_dir, Some("perfdroid_session.csv"));
+                let receiver = cx.prompt_for_new_path(&initial_dir, Some("perfdroid_session.csv"));
                 let export_runtime = Arc::clone(&export_runtime);
                 let export_session = export_session.clone();
-                cx.background_executor().spawn(async move {
-                    let selected_path = match receiver.await {
-                        Ok(Ok(Some(path))) => path,
-                        Ok(Ok(None)) => {
-                            export_runtime.request_status("CSV export canceled.");
-                            return;
-                        }
-                        Ok(Err(err)) => {
-                            export_runtime.request_status(format!(
-                                "failed to open save dialog for CSV export: {err}"
-                            ));
-                            return;
-                        }
-                        Err(err) => {
-                            export_runtime.request_status(format!(
-                                "failed while waiting for CSV save dialog result: {err}"
-                            ));
-                            return;
-                        }
-                    };
+                cx.background_executor()
+                    .spawn(async move {
+                        let selected_path = match receiver.await {
+                            Ok(Ok(Some(path))) => path,
+                            Ok(Ok(None)) => {
+                                export_runtime.request_status("CSV export canceled.");
+                                return;
+                            }
+                            Ok(Err(err)) => {
+                                export_runtime.request_status(format!(
+                                    "failed to open save dialog for CSV export: {err}"
+                                ));
+                                return;
+                            }
+                            Err(err) => {
+                                export_runtime.request_status(format!(
+                                    "failed while waiting for CSV save dialog result: {err}"
+                                ));
+                                return;
+                            }
+                        };
 
-                    let output_path = ensure_csv_extension(selected_path);
-                    match export_session_to_csv(&output_path, &export_session, export_hz) {
-                        Ok(rows) => export_runtime.request_status(format!(
-                            "CSV exported: {} row(s) -> {}",
-                            rows,
-                            output_path.display()
-                        )),
-                        Err(err) => {
-                            export_runtime.request_status(format!("CSV export failed: {err}"))
+                        let output_path = ensure_csv_extension(selected_path);
+                        match export_session_to_csv(&output_path, &export_session, export_hz) {
+                            Ok(rows) => export_runtime.request_status(format!(
+                                "CSV exported: {} row(s) -> {}",
+                                rows,
+                                output_path.display()
+                            )),
+                            Err(err) => {
+                                export_runtime.request_status(format!("CSV export failed: {err}"))
+                            }
                         }
-                    }
-                }).detach();
+                    })
+                    .detach();
             })
             .disabled(!export_allowed);
 
