@@ -29,8 +29,10 @@ function Copy-PackageContents {
         [string]$DestinationDir
     )
 
-    New-Item -ItemType Directory -Path (Join-Path $DestinationDir "adb\win") -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $SourceDir "*") -Destination $DestinationDir -Recurse -Force
+    New-Item -ItemType Directory -Path $DestinationDir -Force | Out-Null
+    Get-ChildItem -LiteralPath $SourceDir -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $DestinationDir -Recurse -Force
+    }
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -38,6 +40,7 @@ $distDir = Join-Path $repoRoot "dist"
 $targetDir = Join-Path $repoRoot "target\release"
 $packageName = "$AppName-$Version-windows-x86_64"
 $packageDir = Join-Path $distDir $packageName
+$packageDirFresh = Join-Path $distDir "$packageName.__fresh"
 $zipPath = Join-Path $distDir "$packageName.zip"
 $stagingRoot = Join-Path $repoRoot "target\packaging"
 $stagingDir = Join-Path $stagingRoot "$packageName-$([guid]::NewGuid().ToString('N'))"
@@ -69,13 +72,21 @@ Compress-Archive -Path (Join-Path $stagingDir "*") -DestinationPath $zipPath -Co
 
 $updatedDistFolder = $false
 try {
+    if (Test-Path $packageDirFresh) {
+        Remove-Item -LiteralPath $packageDirFresh -Recurse -Force
+    }
+    Copy-PackageContents -SourceDir $stagingDir -DestinationDir $packageDirFresh
     if (Test-Path $packageDir) {
         Remove-Item -LiteralPath $packageDir -Recurse -Force
     }
-    Copy-PackageContents -SourceDir $stagingDir -DestinationDir $packageDir
+    Move-Item -LiteralPath $packageDirFresh -Destination $packageDir
     $updatedDistFolder = $true
 } catch {
-    Write-Warning "Unable to refresh $packageDir because files are in use. The zip package was created successfully at $zipPath."
+    if (Test-Path $packageDirFresh) {
+        Write-Warning "Unable to refresh $packageDir cleanly. A complete unpacked package was left at $packageDirFresh and the zip package was created successfully at $zipPath."
+    } else {
+        Write-Warning "Unable to refresh $packageDir because files are in use. The zip package was created successfully at $zipPath."
+    }
 }
 
 Remove-Item -LiteralPath $stagingDir -Recurse -Force
