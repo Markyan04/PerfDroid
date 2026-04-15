@@ -1,6 +1,8 @@
 use adb_client::server::ADBServer;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::{fs, os::unix::fs::PermissionsExt};
 
 const ADB_SERVER_PORT: u16 = 5037;
 
@@ -30,7 +32,14 @@ pub fn workspace_adb_dir() -> PathBuf {
 
 /// Returns the host-specific bundled `adb` executable path.
 pub fn workspace_adb_path() -> PathBuf {
-    workspace_root().join(bundled_adb_relative_path())
+    let adb_path = workspace_root().join(bundled_adb_relative_path());
+    if let Err(err) = ensure_bundled_adb_permissions(&adb_path) {
+        eprintln!(
+            "warning: failed to ensure executable permissions for `{}`: {err}",
+            adb_path.display()
+        );
+    }
+    adb_path
 }
 
 /// Creates an [`ADBServer`] configured to start from the bundled workspace-local `adb`.
@@ -103,6 +112,24 @@ fn source_workspace_root() -> PathBuf {
         .and_then(Path::parent)
         .expect("pdcore should live in <workspace>/crates/pdcore")
         .to_path_buf()
+}
+
+#[cfg(unix)]
+fn ensure_bundled_adb_permissions(adb_path: &Path) -> std::io::Result<()> {
+    let metadata = fs::metadata(adb_path)?;
+    let mode = metadata.permissions().mode();
+    let executable_mode = mode | 0o111;
+    if mode != executable_mode {
+        let mut permissions = metadata.permissions();
+        permissions.set_mode(executable_mode);
+        fs::set_permissions(adb_path, permissions)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_bundled_adb_permissions(_adb_path: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
