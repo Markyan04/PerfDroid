@@ -9,6 +9,8 @@ use pdcore::types::MetricBatch;
 use profiler_cpu_clock::CpuClockProfiler;
 use profiler_cpu_usage::CpuUsageProfiler;
 use profiler_fps::FpsProfiler;
+use profiler_power::BatteryPowerProfiler;
+use profiler_temperature::BatteryTemperatureProfiler;
 
 use crate::device::{AdbDetectedDevice, DeviceDescriptor};
 use crate::session::SessionState;
@@ -73,6 +75,35 @@ impl CpuUsageDataPlane {
     }
 }
 
+pub struct BatteryTemperatureDataPlane;
+
+impl BatteryTemperatureDataPlane {
+    pub fn build_metric_batch(
+        profiler: &BatteryTemperatureProfiler,
+    ) -> Result<MetricBatch, CoreError> {
+        let metadata = profiler.metadata_clone();
+        MetricBatch::new(
+            metadata.profiler_key,
+            "0.1C",
+            vec![profiler.snapshot_value()],
+        )
+    }
+}
+
+pub struct BatteryPowerDataPlane;
+
+impl BatteryPowerDataPlane {
+    pub fn build_metric_batch(profiler: &BatteryPowerProfiler) -> Result<MetricBatch, CoreError> {
+        let metadata = profiler.metadata_clone();
+        let unit = metadata
+            .ordered_collectors()
+            .first()
+            .map(|collector| collector.unit.clone())
+            .unwrap_or_default();
+        MetricBatch::new(metadata.profiler_key, unit, vec![profiler.snapshot_value()])
+    }
+}
+
 pub struct AggregationWorker {
     stop_tx: Sender<()>,
     pause_flag: Arc<AtomicBool>,
@@ -84,6 +115,10 @@ impl AggregationWorker {
         cpu_clock_profiler: Option<Arc<Mutex<CpuClockProfiler>>>,
         cpu_usage_profiler: Option<Arc<Mutex<CpuUsageProfiler>>>,
         fps_profiler: Option<Arc<Mutex<FpsProfiler>>>,
+        battery_temperature_profiler: Option<Arc<Mutex<BatteryTemperatureProfiler>>>,
+        battery_voltage_profiler: Option<Arc<Mutex<BatteryPowerProfiler>>>,
+        battery_current_profiler: Option<Arc<Mutex<BatteryPowerProfiler>>>,
+        battery_power_profiler: Option<Arc<Mutex<BatteryPowerProfiler>>>,
         hz: u64,
         tx: Sender<AggregatorEvent>,
     ) -> Result<Self, String> {
@@ -137,6 +172,58 @@ impl AggregationWorker {
                             .lock()
                             .ok()
                             .and_then(|profiler| FpsDataPlane::build_metric_batch(&profiler).ok());
+
+                        if let Some(batch) = maybe_batch {
+                            let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
+                                timestamp_ms: unix_timestamp_ms(),
+                                batch,
+                            }));
+                        }
+                    }
+
+                    if let Some(profiler) = battery_temperature_profiler.as_ref() {
+                        let maybe_batch = profiler.lock().ok().and_then(|profiler| {
+                            BatteryTemperatureDataPlane::build_metric_batch(&profiler).ok()
+                        });
+
+                        if let Some(batch) = maybe_batch {
+                            let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
+                                timestamp_ms: unix_timestamp_ms(),
+                                batch,
+                            }));
+                        }
+                    }
+
+                    if let Some(profiler) = battery_voltage_profiler.as_ref() {
+                        let maybe_batch = profiler.lock().ok().and_then(|profiler| {
+                            BatteryPowerDataPlane::build_metric_batch(&profiler).ok()
+                        });
+
+                        if let Some(batch) = maybe_batch {
+                            let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
+                                timestamp_ms: unix_timestamp_ms(),
+                                batch,
+                            }));
+                        }
+                    }
+
+                    if let Some(profiler) = battery_current_profiler.as_ref() {
+                        let maybe_batch = profiler.lock().ok().and_then(|profiler| {
+                            BatteryPowerDataPlane::build_metric_batch(&profiler).ok()
+                        });
+
+                        if let Some(batch) = maybe_batch {
+                            let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
+                                timestamp_ms: unix_timestamp_ms(),
+                                batch,
+                            }));
+                        }
+                    }
+
+                    if let Some(profiler) = battery_power_profiler.as_ref() {
+                        let maybe_batch = profiler.lock().ok().and_then(|profiler| {
+                            BatteryPowerDataPlane::build_metric_batch(&profiler).ok()
+                        });
 
                         if let Some(batch) = maybe_batch {
                             let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {

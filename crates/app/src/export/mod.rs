@@ -48,11 +48,19 @@ fn collect_frames(session: &SessionStore) -> Vec<&TimestampedBatch> {
     let mut frames = Vec::with_capacity(
         session.cpu_clock_frames().len()
             + session.cpu_usage_frames().len()
-            + session.fps_frames().len(),
+            + session.fps_frames().len()
+            + session.battery_temperature_frames().len()
+            + session.battery_voltage_frames().len()
+            + session.battery_current_frames().len()
+            + session.battery_power_frames().len(),
     );
     frames.extend(session.cpu_clock_frames().iter());
     frames.extend(session.cpu_usage_frames().iter());
     frames.extend(session.fps_frames().iter());
+    frames.extend(session.battery_temperature_frames().iter());
+    frames.extend(session.battery_voltage_frames().iter());
+    frames.extend(session.battery_current_frames().iter());
+    frames.extend(session.battery_power_frames().iter());
     frames
 }
 
@@ -135,6 +143,22 @@ mod tests {
                 values: vec![1400, 1700],
             },
         });
+        store.push(TimestampedBatch {
+            timestamp_ms: 1500,
+            batch: MetricBatch {
+                metric_key: "BATTERY_TEMP".to_string(),
+                unit: "0.1C".to_string(),
+                values: vec![315],
+            },
+        });
+        store.push(TimestampedBatch {
+            timestamp_ms: 1750,
+            batch: MetricBatch {
+                metric_key: "POWER".to_string(),
+                unit: "mW".to_string(),
+                values: vec![2212],
+            },
+        });
 
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -142,11 +166,13 @@ mod tests {
             .as_nanos();
         let path = std::env::temp_dir().join(format!("perfdroid-export-{suffix}.csv"));
         let rows = export_session_to_csv(&path, &store, 4).expect("export should succeed");
-        assert_eq!(rows, 2);
+        assert_eq!(rows, 4);
 
         let text = std::fs::read_to_string(&path).expect("csv should exist");
         assert!(text.starts_with("time_s(dp=2,hz=4),metric_key,unit,value_0"));
         assert!(text.contains("0.00s,\"CPU_CLOCK\",\"MHz\",1400,1700"));
+        assert!(text.contains("0.50s,\"BATTERY_TEMP\",\"0.1C\",315,-1,-1"));
+        assert!(text.contains("0.75s,\"POWER\",\"mW\",2212,-1,-1"));
         assert!(text.contains("1.00s,\"FPS\",\"FPS\",119,-1,-1"));
 
         let _ = std::fs::remove_file(path);

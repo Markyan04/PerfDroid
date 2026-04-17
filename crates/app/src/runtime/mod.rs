@@ -9,6 +9,8 @@ use pdcore::types::ControlCommand;
 use profiler_cpu_clock::CpuClockProfiler;
 use profiler_cpu_usage::CpuUsageProfiler;
 use profiler_fps::FpsProfiler;
+use profiler_power::BatteryPowerProfiler;
+use profiler_temperature::BatteryTemperatureProfiler;
 use registry::ProfilerRegistry;
 
 use crate::aggregation::{AggregationWorker, AggregatorEvent};
@@ -29,6 +31,10 @@ struct RuntimeInner {
     cpu_clock_profiler: Option<Arc<Mutex<CpuClockProfiler>>>,
     cpu_usage_profiler: Option<Arc<Mutex<CpuUsageProfiler>>>,
     fps_profiler: Option<Arc<Mutex<FpsProfiler>>>,
+    battery_temperature_profiler: Option<Arc<Mutex<BatteryTemperatureProfiler>>>,
+    battery_voltage_profiler: Option<Arc<Mutex<BatteryPowerProfiler>>>,
+    battery_current_profiler: Option<Arc<Mutex<BatteryPowerProfiler>>>,
+    battery_power_profiler: Option<Arc<Mutex<BatteryPowerProfiler>>>,
     worker: Option<AggregationWorker>,
     registry: ProfilerRegistry,
     device: Option<DeviceDescriptor>,
@@ -45,6 +51,10 @@ impl PerfDroidRuntime {
                 cpu_clock_profiler: None,
                 cpu_usage_profiler: None,
                 fps_profiler: None,
+                battery_temperature_profiler: None,
+                battery_voltage_profiler: None,
+                battery_current_profiler: None,
+                battery_power_profiler: None,
                 worker: None,
                 registry: ProfilerRegistry::default(),
                 device: None,
@@ -94,7 +104,9 @@ impl PerfDroidRuntime {
 
         thread::spawn(move || {
             if let Err(err) = runtime.connect(serial.clone()) {
-                let _ = runtime.event_tx.send(AggregatorEvent::Status(err.to_string()));
+                let _ = runtime
+                    .event_tx
+                    .send(AggregatorEvent::Status(err.to_string()));
             } else {
                 let _ = runtime.event_tx.send(AggregatorEvent::Status(format!(
                     "Connected to `{serial}` through USB."
@@ -314,6 +326,133 @@ impl PerfDroidRuntime {
         inner.fps_profiler = fps_profiler
             .as_ref()
             .map(|(profiler, _)| Arc::clone(profiler));
+
+        let battery_temperature_profiler = match BatteryTemperatureProfiler::new(
+            serial_arg.map(str::to_string),
+            Duration::from_secs(1),
+        ) {
+            Ok(mut profiler) => match profiler.connect() {
+                Ok(()) => {
+                    let metadata = profiler.metadata_clone();
+                    inner.registry.register(metadata.clone());
+                    Some((Arc::new(Mutex::new(profiler)), metadata))
+                }
+                Err(err) => {
+                    let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                        "Battery temperature profiler disabled: {err}"
+                    )));
+                    None
+                }
+            },
+            Err(err) => {
+                let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                    "Battery temperature profiler construction failed: {err}"
+                )));
+                None
+            }
+        };
+        inner.battery_temperature_profiler = battery_temperature_profiler
+            .as_ref()
+            .map(|(profiler, _)| Arc::clone(profiler));
+
+        let battery_voltage_profiler = match BatteryPowerProfiler::voltage(
+            serial_arg.map(str::to_string),
+            Duration::from_secs(1),
+        ) {
+            Ok(mut profiler) => match profiler.connect() {
+                Ok(()) => {
+                    if let Some(strategy) = profiler.selected_strategy_label() {
+                        let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                            "Battery voltage profiler using {strategy} strategy."
+                        )));
+                    }
+                    let metadata = profiler.metadata_clone();
+                    inner.registry.register(metadata.clone());
+                    Some((Arc::new(Mutex::new(profiler)), metadata))
+                }
+                Err(err) => {
+                    let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                        "Battery voltage profiler disabled: {err}"
+                    )));
+                    None
+                }
+            },
+            Err(err) => {
+                let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                    "Battery voltage profiler construction failed: {err}"
+                )));
+                None
+            }
+        };
+        inner.battery_voltage_profiler = battery_voltage_profiler
+            .as_ref()
+            .map(|(profiler, _)| Arc::clone(profiler));
+
+        let battery_current_profiler = match BatteryPowerProfiler::current(
+            serial_arg.map(str::to_string),
+            Duration::from_secs(1),
+        ) {
+            Ok(mut profiler) => match profiler.connect() {
+                Ok(()) => {
+                    if let Some(strategy) = profiler.selected_strategy_label() {
+                        let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                            "Battery current profiler using {strategy} strategy."
+                        )));
+                    }
+                    let metadata = profiler.metadata_clone();
+                    inner.registry.register(metadata.clone());
+                    Some((Arc::new(Mutex::new(profiler)), metadata))
+                }
+                Err(err) => {
+                    let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                        "Battery current profiler disabled: {err}"
+                    )));
+                    None
+                }
+            },
+            Err(err) => {
+                let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                    "Battery current profiler construction failed: {err}"
+                )));
+                None
+            }
+        };
+        inner.battery_current_profiler = battery_current_profiler
+            .as_ref()
+            .map(|(profiler, _)| Arc::clone(profiler));
+
+        let battery_power_profiler = match BatteryPowerProfiler::power(
+            serial_arg.map(str::to_string),
+            Duration::from_secs(1),
+        ) {
+            Ok(mut profiler) => match profiler.connect() {
+                Ok(()) => {
+                    if let Some(strategy) = profiler.selected_strategy_label() {
+                        let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                            "Battery power profiler using {strategy} strategy."
+                        )));
+                    }
+                    let metadata = profiler.metadata_clone();
+                    inner.registry.register(metadata.clone());
+                    Some((Arc::new(Mutex::new(profiler)), metadata))
+                }
+                Err(err) => {
+                    let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                        "Battery power profiler disabled: {err}"
+                    )));
+                    None
+                }
+            },
+            Err(err) => {
+                let _ = self.event_tx.send(AggregatorEvent::Status(format!(
+                    "Battery power profiler construction failed: {err}"
+                )));
+                None
+            }
+        };
+        inner.battery_power_profiler = battery_power_profiler
+            .as_ref()
+            .map(|(profiler, _)| Arc::clone(profiler));
         inner.state = SessionState::Connected;
 
         let _ = self.event_tx.send(AggregatorEvent::DeviceUpdated(device));
@@ -355,6 +494,62 @@ impl PerfDroidRuntime {
                         .join(", ")
                 )));
         }
+        if let Some((_, metadata)) = battery_temperature_profiler {
+            let _ = self
+                .event_tx
+                .send(AggregatorEvent::MetadataRegistered(format!(
+                    "{} [{}]",
+                    metadata.profiler_key,
+                    metadata
+                        .ordered_collectors()
+                        .iter()
+                        .map(|collector| collector.collector_key.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+        }
+        if let Some((_, metadata)) = battery_voltage_profiler {
+            let _ = self
+                .event_tx
+                .send(AggregatorEvent::MetadataRegistered(format!(
+                    "{} [{}]",
+                    metadata.profiler_key,
+                    metadata
+                        .ordered_collectors()
+                        .iter()
+                        .map(|collector| collector.collector_key.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+        }
+        if let Some((_, metadata)) = battery_current_profiler {
+            let _ = self
+                .event_tx
+                .send(AggregatorEvent::MetadataRegistered(format!(
+                    "{} [{}]",
+                    metadata.profiler_key,
+                    metadata
+                        .ordered_collectors()
+                        .iter()
+                        .map(|collector| collector.collector_key.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+        }
+        if let Some((_, metadata)) = battery_power_profiler {
+            let _ = self
+                .event_tx
+                .send(AggregatorEvent::MetadataRegistered(format!(
+                    "{} [{}]",
+                    metadata.profiler_key,
+                    metadata
+                        .ordered_collectors()
+                        .iter()
+                        .map(|collector| collector.collector_key.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+        }
         let _ = self
             .event_tx
             .send(AggregatorEvent::SamplingRateChanged(inner.selected_hz));
@@ -378,6 +573,10 @@ impl PerfDroidRuntime {
         let cpu_clock_profiler = inner.cpu_clock_profiler.clone();
         let cpu_usage_profiler = inner.cpu_usage_profiler.clone();
         let fps_profiler = inner.fps_profiler.clone();
+        let battery_temperature_profiler = inner.battery_temperature_profiler.clone();
+        let battery_voltage_profiler = inner.battery_voltage_profiler.clone();
+        let battery_current_profiler = inner.battery_current_profiler.clone();
+        let battery_power_profiler = inner.battery_power_profiler.clone();
 
         if let Some(profiler) = cpu_clock_profiler.as_ref() {
             profiler
@@ -397,12 +596,40 @@ impl PerfDroidRuntime {
                 .map_err(|_| CoreError::Runtime("FPS profiler lock poisoned".to_string()))?
                 .start()?;
         }
+        if let Some(profiler) = battery_temperature_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("BATTERY_TEMP profiler lock poisoned".to_string()))?
+                .start()?;
+        }
+        if let Some(profiler) = battery_voltage_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("VOLTAGE profiler lock poisoned".to_string()))?
+                .start()?;
+        }
+        if let Some(profiler) = battery_current_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("CURRENT profiler lock poisoned".to_string()))?
+                .start()?;
+        }
+        if let Some(profiler) = battery_power_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("POWER profiler lock poisoned".to_string()))?
+                .start()?;
+        }
 
         inner.worker = Some(
             AggregationWorker::spawn(
                 cpu_clock_profiler,
                 cpu_usage_profiler,
                 fps_profiler,
+                battery_temperature_profiler,
+                battery_voltage_profiler,
+                battery_current_profiler,
+                battery_power_profiler,
                 inner.selected_hz,
                 self.event_tx.clone(),
             )
@@ -443,6 +670,30 @@ impl PerfDroidRuntime {
                 .map_err(|_| CoreError::Runtime("FPS profiler lock poisoned".to_string()))?
                 .pause()?;
         }
+        if let Some(profiler) = inner.battery_temperature_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("BATTERY_TEMP profiler lock poisoned".to_string()))?
+                .pause()?;
+        }
+        if let Some(profiler) = inner.battery_voltage_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("VOLTAGE profiler lock poisoned".to_string()))?
+                .pause()?;
+        }
+        if let Some(profiler) = inner.battery_current_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("CURRENT profiler lock poisoned".to_string()))?
+                .pause()?;
+        }
+        if let Some(profiler) = inner.battery_power_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("POWER profiler lock poisoned".to_string()))?
+                .pause()?;
+        }
         if let Some(worker) = inner.worker.as_ref() {
             worker.pause();
         }
@@ -476,6 +727,30 @@ impl PerfDroidRuntime {
             profiler
                 .lock()
                 .map_err(|_| CoreError::Runtime("FPS profiler lock poisoned".to_string()))?
+                .restart()?;
+        }
+        if let Some(profiler) = inner.battery_temperature_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("BATTERY_TEMP profiler lock poisoned".to_string()))?
+                .restart()?;
+        }
+        if let Some(profiler) = inner.battery_voltage_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("VOLTAGE profiler lock poisoned".to_string()))?
+                .restart()?;
+        }
+        if let Some(profiler) = inner.battery_current_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("CURRENT profiler lock poisoned".to_string()))?
+                .restart()?;
+        }
+        if let Some(profiler) = inner.battery_power_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("POWER profiler lock poisoned".to_string()))?
                 .restart()?;
         }
         if let Some(worker) = inner.worker.as_ref() {
@@ -518,9 +793,37 @@ impl PerfDroidRuntime {
                 .map_err(|_| CoreError::Runtime("FPS profiler lock poisoned".to_string()))?
                 .stop()?;
         }
+        if let Some(profiler) = inner.battery_temperature_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("BATTERY_TEMP profiler lock poisoned".to_string()))?
+                .stop()?;
+        }
+        if let Some(profiler) = inner.battery_voltage_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("VOLTAGE profiler lock poisoned".to_string()))?
+                .stop()?;
+        }
+        if let Some(profiler) = inner.battery_current_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("CURRENT profiler lock poisoned".to_string()))?
+                .stop()?;
+        }
+        if let Some(profiler) = inner.battery_power_profiler.as_ref() {
+            profiler
+                .lock()
+                .map_err(|_| CoreError::Runtime("POWER profiler lock poisoned".to_string()))?
+                .stop()?;
+        }
         inner.cpu_clock_profiler = None;
         inner.cpu_usage_profiler = None;
         inner.fps_profiler = None;
+        inner.battery_temperature_profiler = None;
+        inner.battery_voltage_profiler = None;
+        inner.battery_current_profiler = None;
+        inner.battery_power_profiler = None;
         inner.state = SessionState::Stopped;
         let _ = self
             .event_tx

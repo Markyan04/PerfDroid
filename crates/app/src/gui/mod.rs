@@ -6,8 +6,8 @@ use std::sync::mpsc::{self, Receiver};
 
 use gpui::{
     App, AppContext, Application, Bounds, Context, Entity, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, Subscription, Window, WindowBounds,
-    WindowOptions, div, hsla, px, rgb, size, transparent_black,
+    ParentElement, Render, SharedString, Styled, Subscription, Window, WindowBounds, WindowOptions,
+    div, hsla, px, rgb, size, transparent_black,
 };
 use gpui_component::Disableable;
 use gpui_component::Root;
@@ -26,7 +26,7 @@ use crate::device::{AdbDetectedDevice, DeviceDescriptor};
 use crate::export::export_session_to_csv;
 use crate::runtime::PerfDroidRuntime;
 use crate::session::SessionState;
-use crate::storage::SessionStore;
+use crate::storage::{SessionStore, TimestampedBatch};
 
 const WINDOW_WIDTH: f32 = 1440.0;
 const WINDOW_HEIGHT: f32 = 960.0;
@@ -232,6 +232,88 @@ impl PerfDroidDemo {
             .collect()
     }
 
+    fn build_battery_temperature_rows(&self) -> Vec<PlotRow> {
+        self.build_single_metric_rows(self.session.battery_temperature_frames(), 10.0)
+    }
+
+    fn build_single_metric_rows(&self, frames: &[TimestampedBatch], scale: f64) -> Vec<PlotRow> {
+        let Some(first) = frames.first() else {
+            return Vec::new();
+        };
+
+        frames
+            .iter()
+            .map(|frame| {
+                let elapsed_s =
+                    (frame.timestamp_ms.saturating_sub(first.timestamp_ms)) as f64 / 1000.0;
+                let mut values = [0.0; 10];
+                if let Some(value) = frame.batch.values.first().copied() {
+                    values[0] = if value < 0 {
+                        0.0
+                    } else {
+                        value as f64 / scale.max(1.0)
+                    };
+                }
+
+                PlotRow {
+                    time_label: format!("{elapsed_s:.1}s").into(),
+                    values,
+                }
+            })
+            .collect()
+    }
+
+    fn build_battery_power_metric_rows(&self) -> Vec<PlotRow> {
+        let voltage_frames = self.session.battery_voltage_frames();
+        let current_frames = self.session.battery_current_frames();
+        let power_frames = self.session.battery_power_frames();
+        let total_rows = voltage_frames
+            .len()
+            .max(current_frames.len())
+            .max(power_frames.len());
+
+        if total_rows == 0 {
+            return Vec::new();
+        }
+
+        let first_timestamp_ms = voltage_frames
+            .first()
+            .or_else(|| current_frames.first())
+            .or_else(|| power_frames.first())
+            .map(|frame| frame.timestamp_ms)
+            .unwrap_or(0);
+
+        (0..total_rows)
+            .map(|idx| {
+                let timestamp_ms = voltage_frames
+                    .get(idx)
+                    .or_else(|| current_frames.get(idx))
+                    .or_else(|| power_frames.get(idx))
+                    .map(|frame| frame.timestamp_ms)
+                    .unwrap_or(first_timestamp_ms);
+                let elapsed_s = (timestamp_ms.saturating_sub(first_timestamp_ms)) as f64 / 1000.0;
+                let mut values = [0.0; 10];
+                values[0] = voltage_frames
+                    .get(idx)
+                    .and_then(frame_scalar_value)
+                    .unwrap_or(0.0);
+                values[1] = current_frames
+                    .get(idx)
+                    .and_then(frame_scalar_value)
+                    .unwrap_or(0.0);
+                values[2] = power_frames
+                    .get(idx)
+                    .and_then(frame_scalar_value)
+                    .unwrap_or(0.0);
+
+                PlotRow {
+                    time_label: format!("{elapsed_s:.1}s").into(),
+                    values,
+                }
+            })
+            .collect()
+    }
+
     fn render_cpu_clock_chart(&self, chart_width: f32) -> impl IntoElement {
         let rows = self.build_plot_rows();
         let max_value = rows
@@ -346,6 +428,155 @@ impl PerfDroidDemo {
                 0xDC2626,
             ))))
             .child(chart_footer("Metric: FPS | unit: FPS | collector: main"))
+    }
+
+    fn render_battery_temperature_chart(&self, chart_width: f32) -> impl IntoElement {
+        let rows = self.build_battery_temperature_rows();
+        let max_value = rows
+            .iter()
+            .map(|row| row.values[0])
+            .fold(0.0_f64, f64::max)
+            .max(30.0);
+        let tick_margin = (rows.len() / 12).max(1);
+        let plot_width = (chart_width - Y_AXIS_WIDTH).max(320.0);
+        let chart = LineChart::new(rows)
+            .x(|row: &PlotRow| row.time_label.clone())
+            .y(|row: &PlotRow| row.values[0])
+            .stroke(rgb(0xD97706))
+            .linear()
+            .tick_margin(tick_margin);
+
+        div()
+            .w(px(chart_width))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(section_title("Battery Temperature"))
+            .child(
+                div().flex().flex_row().justify_center().child(metric_card(
+                    "Battery",
+                    self.session
+                        .latest_battery_temperature_value()
+                        .map(format_temperature_value)
+                        .unwrap_or_else(|| "--".to_string()),
+                )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .child(render_decimal_y_axis(max_value, "C"))
+                    .child(
+                        div()
+                            .w(px(plot_width))
+                            .h(px(CHART_HEIGHT))
+                            .border_1()
+                            .rounded_md()
+                            .p_2()
+                            .child(chart),
+                    ),
+            )
+            .child(render_legend(std::iter::once((
+                "battery".to_string(),
+                0xD97706,
+            ))))
+            .child(chart_footer(
+                "Metric: BATTERY_TEMP | unit: 0.1C | collector: battery",
+            ))
+    }
+
+    fn render_battery_power_metrics_chart(&self, chart_width: f32) -> impl IntoElement {
+        let rows = self.build_battery_power_metric_rows();
+        let voltage_enabled = !self.session.battery_voltage_frames().is_empty();
+        let current_enabled = !self.session.battery_current_frames().is_empty();
+        let power_enabled = !self.session.battery_power_frames().is_empty();
+        let max_value = rows
+            .iter()
+            .flat_map(|row| row.values.iter().take(3).copied())
+            .fold(0.0_f64, f64::max)
+            .max(100.0);
+        let tick_margin = (rows.len() / 12).max(1);
+        let plot_width = (chart_width - Y_AXIS_WIDTH).max(320.0);
+        let mut chart = AreaChart::new(rows)
+            .x(|row: &PlotRow| row.time_label.clone())
+            .tick_margin(tick_margin);
+
+        let mut legend_items = Vec::new();
+
+        for (enabled, label, value_index, color) in [
+            (voltage_enabled, "voltage (mV)", 0usize, 0x2563EB),
+            (current_enabled, "current (mA)", 1usize, 0x10B981),
+            (power_enabled, "power (mW)", 2usize, 0xDB2777),
+        ] {
+            if !enabled {
+                continue;
+            }
+
+            legend_items.push((label.to_string(), color));
+            chart = chart
+                .y(move |row: &PlotRow| row.values[value_index])
+                .stroke(rgb(color))
+                .linear()
+                .fill(transparent_black());
+        }
+
+        div()
+            .w(px(chart_width))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(section_title("Battery Power Metrics"))
+            .child(
+                div()
+                    .w(px(chart_width))
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .justify_center()
+                    .gap_2()
+                    .child(metric_card(
+                        "Voltage",
+                        self.session
+                            .latest_battery_voltage_value()
+                            .map(format_voltage_value)
+                            .unwrap_or_else(|| "--".to_string()),
+                    ))
+                    .child(metric_card(
+                        "Current",
+                        self.session
+                            .latest_battery_current_value()
+                            .map(format_current_value)
+                            .unwrap_or_else(|| "--".to_string()),
+                    ))
+                    .child(metric_card(
+                        "Power",
+                        self.session
+                            .latest_battery_power_value()
+                            .map(format_power_value)
+                            .unwrap_or_else(|| "--".to_string()),
+                    )),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .child(render_numeric_y_axis(max_value))
+                    .child(
+                        div()
+                            .w(px(plot_width))
+                            .h(px(CHART_HEIGHT))
+                            .border_1()
+                            .rounded_md()
+                            .p_2()
+                            .child(chart),
+                    ),
+            )
+            .child(render_legend(legend_items))
+            .child(chart_footer(
+                "Metrics: VOLTAGE / CURRENT / POWER | units: mV, mA, mW | collector: battery",
+            ))
     }
 
     fn build_cpu_usage_rows(&self) -> Vec<PlotRow> {
@@ -532,6 +763,10 @@ impl PerfDroidDemo {
                 self.session.cpu_clock_frames().len()
                     + self.session.cpu_usage_frames().len()
                     + self.session.fps_frames().len()
+                    + self.session.battery_temperature_frames().len()
+                    + self.session.battery_voltage_frames().len()
+                    + self.session.battery_current_frames().len()
+                    + self.session.battery_power_frames().len()
             ),
             format!("Runtime snapshot: {}", self.runtime.state().as_str()),
         ]);
@@ -846,18 +1081,14 @@ impl PerfDroidDemo {
                             .text_center()
                             .child("Working"),
                     )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_center()
-                            .whitespace_normal()
-                            .child(if self.busy_message.trim().is_empty() {
-                                "Please wait while PerfDroid finishes the current device operation."
-                                    .to_string()
-                            } else {
-                                self.busy_message.clone()
-                            }),
-                    )
+                    .child(div().text_sm().text_center().whitespace_normal().child(
+                        if self.busy_message.trim().is_empty() {
+                            "Please wait while PerfDroid finishes the current device operation."
+                                .to_string()
+                        } else {
+                            self.busy_message.clone()
+                        },
+                    ))
                     .child(helper_text("Other page actions are temporarily disabled.")),
             )
     }
@@ -904,6 +1135,14 @@ impl Render for PerfDroidDemo {
                 .child(chart_section(self.render_cpu_clock_chart(chart_width)))
                 .child(div().h(px(12.0)))
                 .child(chart_section(self.render_cpu_usage_chart(chart_width)))
+                .child(div().h(px(12.0)))
+                .child(chart_section(
+                    self.render_battery_temperature_chart(chart_width),
+                ))
+                .child(div().h(px(12.0)))
+                .child(chart_section(
+                    self.render_battery_power_metrics_chart(chart_width),
+                ))
                 .child(div().h(px(12.0)))
                 .child(chart_section(self.render_fps_chart(chart_width))),
         );
@@ -988,6 +1227,40 @@ fn render_y_axis(max_value: f64, unit: &str) -> impl IntoElement {
         .child(format!("0 {unit}"))
 }
 
+fn render_decimal_y_axis(max_value: f64, unit: &str) -> impl IntoElement {
+    let top = max_value.max(1.0);
+    let middle = top / 2.0;
+    div()
+        .w(px(Y_AXIS_WIDTH))
+        .h(px(CHART_HEIGHT))
+        .flex()
+        .flex_col()
+        .justify_between()
+        .items_end()
+        .pr_2()
+        .text_sm()
+        .child(format!("{top:.1} {unit}"))
+        .child(format!("{middle:.1} {unit}"))
+        .child(format!("0.0 {unit}"))
+}
+
+fn render_numeric_y_axis(max_value: f64) -> impl IntoElement {
+    let top = max_value.max(1.0);
+    let middle = top / 2.0;
+    div()
+        .w(px(Y_AXIS_WIDTH))
+        .h(px(CHART_HEIGHT))
+        .flex()
+        .flex_col()
+        .justify_between()
+        .items_end()
+        .pr_2()
+        .text_sm()
+        .child(format!("{top:.0}"))
+        .child(format!("{middle:.0}"))
+        .child("0")
+}
+
 fn render_legend(items: impl IntoIterator<Item = (String, u32)>) -> impl IntoElement {
     div()
         .flex()
@@ -1058,6 +1331,32 @@ fn chart_section(content: impl IntoElement) -> impl IntoElement {
         .border_1()
         .bg(rgb(0xFFF9F1))
         .child(content)
+}
+
+fn format_temperature_value(raw_deci_c: i64) -> String {
+    format!("{:.1} C", raw_deci_c as f64 / 10.0)
+}
+
+fn format_voltage_value(raw_mv: i64) -> String {
+    format!("{raw_mv} mV")
+}
+
+fn format_current_value(raw_ma: i64) -> String {
+    format!("{raw_ma} mA")
+}
+
+fn format_power_value(raw_mw: i64) -> String {
+    format!("{raw_mw} mW")
+}
+
+fn frame_scalar_value(frame: &TimestampedBatch) -> Option<f64> {
+    frame
+        .batch
+        .values
+        .first()
+        .copied()
+        .filter(|value| *value >= 0)
+        .map(|value| value as f64)
 }
 
 fn ensure_csv_extension(path: PathBuf) -> PathBuf {

@@ -111,6 +111,8 @@ dependencies = [
  "profiler-cpu-clock",
  "profiler-cpu-usage",
  "profiler-fps",
+ "profiler-power",
+ "profiler-temperature",
  "registry",
 ]
 
@@ -4470,6 +4472,7 @@ dependencies = [
 name = "profiler-power"
 version = "0.1.0"
 dependencies = [
+ "adb_client",
  "pdcore",
 ]
 
@@ -4477,6 +4480,7 @@ dependencies = [
 name = "profiler-temperature"
 version = "0.1.0"
 dependencies = [
+ "adb_client",
  "pdcore",
 ]
 

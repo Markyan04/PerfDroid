@@ -165,7 +165,9 @@ fn query_wireless_ip(serial: &str) -> Result<String, String> {
 
     if let Some(address) = query_wireless_ip_from_command(
         serial,
-        &["shell", "ip", "-f", "inet", "-o", "addr", "show", "up", "scope", "global"],
+        &[
+            "shell", "ip", "-f", "inet", "-o", "addr", "show", "up", "scope", "global",
+        ],
         extract_preferred_wireless_inet_ip,
         &mut failures,
     ) {
@@ -208,7 +210,11 @@ fn query_wireless_ip(serial: &str) -> Result<String, String> {
         return Ok(address);
     }
 
-    for property in ["dhcp.wlan0.ipaddress", "dhcp.wlan1.ipaddress", "dhcp.eth0.ipaddress"] {
+    for property in [
+        "dhcp.wlan0.ipaddress",
+        "dhcp.wlan1.ipaddress",
+        "dhcp.eth0.ipaddress",
+    ] {
         let command = ["shell", "getprop", property];
         if let Some(address) =
             query_wireless_ip_from_command(serial, &command, extract_first_ipv4, &mut failures)
@@ -274,9 +280,7 @@ fn probe_wireless_transport_ready(serial: &str) -> Result<(), String> {
                 }
             },
             Ok(state) => {
-                last_message = format!(
-                    "ADB reported `{serial}` as `{state}` after connecting"
-                );
+                last_message = format!("ADB reported `{serial}` as `{state}` after connecting");
             }
             Err(err) => last_message = err,
         }
@@ -286,7 +290,9 @@ fn probe_wireless_transport_ready(serial: &str) -> Result<(), String> {
         }
     }
 
-    Err(format!("{last_message}; the wireless transport did not become ready in time"))
+    Err(format!(
+        "{last_message}; the wireless transport did not become ready in time"
+    ))
 }
 
 fn adb_target_state(serial: &str) -> Result<String, String> {
@@ -524,10 +530,7 @@ default via 10.0.252.217 dev rmnet_data0 proto static src 10.0.252.219
             .collect::<Vec<_>>();
 
         assert_eq!(parsed.len(), 1);
-        assert_eq!(
-            parsed[0].serial,
-            "FA79X1A00000"
-        );
+        assert_eq!(parsed[0].serial, "FA79X1A00000");
     }
 
     #[test]

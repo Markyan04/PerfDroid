@@ -11,4 +11,6 @@ pdcore = { path = "../pdcore" }
 profiler-cpu-clock = { path = "../profiler/cpu_clock" }
 profiler-cpu-usage = { path = "../profiler/cpu_usage" }
 profiler-fps = { path = "../profiler/fps" }
+profiler-power = { path = "../profiler/power" }
+profiler-temperature = { path = "../profiler/temperature" }
 registry = { path = "../registry" }
