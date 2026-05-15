@@ -4,5 +4,14 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+adb_client.workspace = true
+gpui.workspace = true
+gpui-component.workspace = true
 pdcore = { path = "../pdcore" }
+profiler-cpu-clock = { path = "../profiler/cpu_clock" }
+profiler-cpu-usage = { path = "../profiler/cpu_usage" }
+profiler-fps = { path = "../profiler/fps" }
+profiler-power = { path = "../profiler/power" }
+profiler-temperature = { path = "../profiler/temperature" }
 registry = { path = "../registry" }
+resvg = "0.45.1"

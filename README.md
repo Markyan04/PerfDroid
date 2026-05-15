@@ -1,58 +1,60 @@
 # PerfDroid
 
-PerfDroid 是一个面向 Android 设备性能分析场景的开源桌面工具，目标是在 PC 侧通过 ADB 对设备进行低侵入式指标采集、聚合、可视化与导出。项目当前采用 Rust workspace 组织，围绕可扩展的 profiler 架构构建。
+[中文文档 (Chinese README)](README.zh-CN.md)
 
-## 项目简介
+PerfDroid is an open-source desktop tool for Android performance profiling. It focuses on low-intrusion metric collection, aggregation, visualization, and export from the PC side through ADB. The project is organized as a Rust workspace with an extensible profiler architecture.
 
-移动应用，尤其是移动游戏，对 FPS、CPU 频率、CPU 利用率、温度和功耗等指标非常敏感。PerfDroid 希望提供一个免费、开源、可扩展的 Android 性能测试基础设施，用于替代闭源或商业化工具在教学和研究场景中的限制。
+## Overview
 
-和直接运行在手机上的性能工具不同，PerfDroid 的核心思路是将采集链路尽量放在 PC 侧完成：
+Mobile apps, especially mobile games, are sensitive to metrics such as FPS, CPU clock, CPU usage, temperature, and power. PerfDroid aims to provide a free, open, and extensible Android performance testing foundation for education and research scenarios.
 
-- 通过 ADB 与 Android 设备通信
-- 由独立的 profiler 模块采集不同指标
-- 统一聚合为标准化数据结构
-- 在上层完成可视化、会话管理和导出
+Instead of running heavy logic on the phone, PerfDroid moves most of the collection pipeline to the PC side:
 
-## 计划支持的能力
+- Communicate with Android devices through ADB
+- Collect different metrics with independent profiler modules
+- Aggregate data into a unified structure
+- Handle visualization, session control, and export at the application layer
 
-- Android 设备识别与连接
-- 会话控制：`Connect`、`Start`、`Pause`、`Restart`、`Stop`
-- 多指标采集：
+## Planned Capabilities
+
+- Android device detection and connection
+- Session controls: `Connect`, `Start`, `Pause`, `Restart`, `Stop`
+- Multi-metric collection:
   - FPS
   - CPU Clock
   - CPU Usage
   - Temperature
   - Power
-- 实时数据聚合与图表展示
-- 会话数据导出（如 CSV / JSON / PNG / HTML）
+- Real-time aggregation and chart rendering
+- Session export (CSV / JSON / PNG / HTML)
 
-## 架构概览
+## Architecture
 
-PerfDroid 采用三层结构：
+PerfDroid follows a 3-layer structure:
 
-- `Profiler Layer`：各个指标采集器独立运行，负责直接读取设备或系统接口数据
-- `Aggregation Layer`：统一读取 profiler 最新结果，组装标准化 `MetricBatch`
-- `GUI Layer`：负责展示、控制、会话管理与导出
+- `Profiler Layer`: independent metric collectors that read device/system sources
+- `Aggregation Layer`: reads latest profiler outputs and builds standardized `MetricBatch`
+- `GUI Layer`: visualization, control, session management, and export
 
-在线程模型上，项目采用 `1 + n` 模式：
+Thread model: `1 + n`
 
-- `1` 个应用线程负责聚合与上层控制
-- `n` 个 profiler 线程分别采集各自指标
+- `1` app thread for aggregation and top-level control
+- `n` profiler threads for metric collection
 
 ![Architecture](docs/images/archtitecture.png)
 
-Profiler 层的设计重点是模块化与低耦合，每个指标理论上都可以作为独立 crate 演进：
+Profiler layer design emphasizes modularity and low coupling. In practice, each metric can evolve as an independent crate:
 
 ![Profiler Layer](docs/images/profiler_layer.png)
 
-## 仓库结构
+## Repository Layout
 
 ```text
 PerfDroid/
 ├── crates/
-│   ├── app/                    # 应用层模块骨架
-│   ├── pdcore/                 # 核心抽象、类型、错误和常量
-│   ├── registry/               # profiler 注册与元数据管理
+│   ├── app/                    # App layer
+│   ├── pdcore/                 # Core abstractions, types, errors, constants
+│   ├── registry/               # Profiler registration and metadata
 │   └── profiler/
 │       ├── cpu_clock/
 │       ├── cpu_usage/
@@ -60,16 +62,65 @@ PerfDroid/
 │       ├── power/
 │       └── temperature/
 ├── docs/
-│   ├── tech_doc.md             # 技术设计文档
-│   └── images/                 # 架构图和示意图
-└── Cargo.toml                  # Rust workspace 配置
+│   ├── tech_doc.md             # Technical design document
+│   └── images/                 # Architecture diagrams and images
+└── Cargo.toml                  # Rust workspace config
 ```
 
-### 环境要求
+## Requirements
 
 - Rust stable
 - Cargo
+- [`just`](https://github.com/casey/just) (task runner for dev/build/package commands)
+
+## Common Development Commands
+
+A root-level `justfile` is provided:
+
+```bash
+just --list
+just check
+just test
+just run
+just clippy
+```
+
+## Build Release Packages (Windows / Linux / macOS)
+
+Install Rust targets first:
+
+```bash
+just install-targets
+```
+
+Package per platform:
+
+```bash
+just package-linux
+just package-macos
+just package-windows
+```
+
+Artifacts are generated under `dist/`, for example:
+
+- `perfdroid-0.1.0-linux-x86_64.tar.gz`
+- `perfdroid-0.1.0-macos-x86_64.tar.gz`
+- `perfdroid-0.1.0-windows-x86_64.zip`
+
+Each release package includes platform-specific bundled ADB binaries in `adb/`:
+
+- Linux: `adb/adb`
+- macOS: `adb/adb`
+- Windows: `adb/adb.exe` + `AdbWinApi.dll` + `AdbWinUsbApi.dll`
+
+## ADB Permission Notes (Linux / macOS)
+
+If executable permission is lost after extracting archives or moving filesystems, you may see `Permission denied`. Fix with:
+
+```bash
+chmod +x adb/linux/adb adb/mac/adb
+```
 
 ## License
 
-本项目基于 Apache-2.0 License 开源，详见 [`LICENSE`](LICENSE)。
+This project is licensed under Apache-2.0. See [`LICENSE`](LICENSE).

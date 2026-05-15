@@ -27,6 +27,15 @@ pub enum CoreError {
     },
     /// Control command string could not be parsed.
     InvalidControlCommand(String),
+    /// Runtime state transition is invalid for the requested operation.
+    InvalidStateTransition {
+        /// Current state key.
+        state: String,
+        /// Requested operation.
+        operation: String,
+    },
+    /// A runtime or integration error that should be surfaced upstream.
+    Runtime(String),
 }
 
 impl Display for CoreError {
@@ -46,6 +55,13 @@ impl Display for CoreError {
             Self::InvalidControlCommand(command) => {
                 write!(f, "invalid control command `{command}`")
             }
+            Self::InvalidStateTransition { state, operation } => {
+                write!(
+                    f,
+                    "operation `{operation}` is not allowed while in state `{state}`"
+                )
+            }
+            Self::Runtime(message) => write!(f, "{message}"),
         }
     }
 }

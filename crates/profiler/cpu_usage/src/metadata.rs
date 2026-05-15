@@ -1,1 +1,2 @@
-pub const PROFILER_ID: &str = "cpu_usage";
+pub const PROFILER_KEY: &str = "CPU_USAGE";
+pub const UNIT_PERCENT: &str = "%";
