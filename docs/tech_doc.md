@@ -1,8 +1,8 @@
 # PerfDroid 开发技术文档
 
 # Part00 文档规范
-- Doc Version 1.2
-- Update at 21:57 14/04/2026
+- Doc Version 1.3
+- Update at 2026-05-15 (for main/1.0.0)
 
 ## 0.1 文档用词统一标准
 | 用词 | 含义 |
@@ -22,7 +22,7 @@
 | Metric | 一个可被系统采集、展示、导出的性能指标，如 FPS、CPU_CLOCK、TEMP、POWER。 |
 | Metric Batch | 某一时刻、某一指标的一组结构化采样结果。 |
 | Device Descriptor | 对被测设备的识别描述，包括设备 ID、连接方式、型号、Android 版本等信息。 |
-| Exporter | GUI Layer 中负责将会话数据导出（当前版本仅支持 CSV）的模块。 |
+| Exporter | GUI Layer 中负责将会话数据导出（当前版本支持 CSV / JSON / HTML / PNG）的模块。 |
 | Data Part | GUI Layer 中负责图表展示、数据列表展示、会话数据管理、时间区间删除与导出前数据预处理的功能区域。 |
 | Control Part | GUI Layer 中负责用户控制操作的功能区域，用于触发 Start、Pause、Restart、Stop、Export 等命令，并管理采样参数与测试流程。 |
 | Device Part | GUI Layer 中负责设备识别、设备选择、连接方式展示与设备基础信息展示的功能区域。 |
@@ -115,6 +115,19 @@
 - 多设备识别
 - 指标开关配置
 - 会话级元数据记录
+
+### 1.3.3 基于 main 分支 1.0.0 的实现状态
+- 已实现：
+  - 设备识别与连接（USB / WiFi）
+  - 会话控制（Connect / Start / Pause / Restart / Stop）
+  - 指标采集：`FPS`、`CPU_CLOCK`、`CPU_USAGE`、`BATTERY_TEMP`、`VOLTAGE`、`CURRENT`、`POWER`
+  - 实时图表展示
+  - 会话导出：`CSV` / `JSON` / `HTML` / `PNG`
+  - 测试区间删除
+- 未在 1.0.0 中完整落地（保留为后续演进方向）：
+  - 多设备并行测试
+  - 指标开关的精细化配置面板
+  - 更完整的会话级元数据管理
 
 # Part02 软件体系结构
 - 本部分对软件体系结构的描述采用自底向上的方式。
@@ -429,10 +442,10 @@ Disconnected -> Connected -> Running -> Paused -> Running -> Stopped -> Connecte
 ### 2.5.3 Data Part
 - Data Part 负责基于后端传输的数据绘制图表，并提供基础数据操作能力。
 - 功能包括：
-  - 多指标图表展示（当前包括 `CPU_CLOCK`、`CPU_USAGE`、`FPS`）
+  - 多指标图表展示（当前包括 `CPU_CLOCK`、`CPU_USAGE`、`FPS`、`BATTERY_TEMP`、`VOLTAGE`、`CURRENT`、`POWER`）
   - 单指标多通道展示
   - 实时当前值展示
-  - 会话数据导出（CSV）
+  - 会话数据导出（CSV / JSON / HTML / PNG）
 
 ### 2.5.4 Control Part
 - Control Part 负责测试流程控制。
@@ -441,7 +454,7 @@ Disconnected -> Connected -> Running -> Paused -> Running -> Stopped -> Connecte
   - Pause
   - Restart
   - Stop
-  - Export（CSV）
+  - Export（CSV / JSON / HTML / PNG）
 - 此外还可配置：
   - 采样频率（Hz）
   - 被测试应用的包名（FPS模块将会依赖于此）
