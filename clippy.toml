@@ -1,0 +1,6 @@
+disallowed-methods = [
+  { path = "core::option::Option::unwrap_unchecked", reason = "unsafe" },
+  { path = "std::option::Option::unwrap", reason = "use explicit handling" }
+]
+
+msrv = "1.74"

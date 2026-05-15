@@ -1,0 +1,7 @@
+[package]
+name = "registry"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pdcore = { path = "../pdcore" }

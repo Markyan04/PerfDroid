@@ -1,0 +1,7 @@
+[package]
+name = "pdcore"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+adb_client.workspace = true

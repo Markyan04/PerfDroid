@@ -1,0 +1,8 @@
+[package]
+name = "profiler-cpu-usage"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+adb_client.workspace = true
+pdcore = { path = "../../pdcore" }
