@@ -129,6 +129,16 @@
   - 指标开关的精细化配置面板
   - 更完整的会话级元数据管理
 
+### 1.3.4 1.0.0 新增功能补充说明
+- 采样频率支持在运行时调整，当前实现范围为 `1~10 Hz`。
+- FPS 指标支持在 GUI 中配置目标应用包名，并在运行时同步到 FPS Profiler。
+- 会话数据支持“按时间区间删除”，用于清理异常片段后再导出。
+- 导出能力已扩展为 `CSV / JSON / HTML / PNG`，并统一要求在 `Paused` 或 `Stopped` 状态下触发。
+- 图表支持交互式数据查看：
+  - 支持查看某一时间点的具体指标值
+  - 支持选择某一时间区间并查看统计数据（如均值、最小值、最大值）
+  - 支持删除选中时间区间的数据
+
 # Part02 软件体系结构
 - 本部分对软件体系结构的描述采用自底向上的方式。
 
@@ -326,7 +336,7 @@ let batch = MetricBatch {
   - Pause
   - Restart
   - Stop
-- GUI 侧还提供 Export（CSV）动作。Export 不改变 SessionState，但受状态约束（仅 `Paused` / `Stopped` 允许）。
+- GUI 侧还提供 Export（CSV / JSON / HTML / PNG）动作。Export 不改变 SessionState，但受状态约束（仅 `Paused` / `Stopped` 允许）。
 - Aggregator 中定义如下状态枚举：
 ```Rust
 pub enum SessionState {
@@ -445,6 +455,9 @@ Disconnected -> Connected -> Running -> Paused -> Running -> Stopped -> Connecte
   - 多指标图表展示（当前包括 `CPU_CLOCK`、`CPU_USAGE`、`FPS`、`BATTERY_TEMP`、`VOLTAGE`、`CURRENT`、`POWER`）
   - 单指标多通道展示
   - 实时当前值展示
+  - 单时间点数据查看
+  - 时间区间统计数据查看
+  - 时间区间数据删除
   - 会话数据导出（CSV / JSON / HTML / PNG）
 
 ### 2.5.4 Control Part

@@ -23,6 +23,17 @@ PerfDroid is an open-source desktop tool for Android performance profiling. Vers
   - HTML report
   - PNG report
 
+## 1.0.0 Runtime Notes
+
+- Sampling rate is configurable at runtime, currently clamped to `1~10 Hz`.
+- Export actions are available only in `Paused` or `Stopped` session states.
+- FPS sampling depends on the target Android package name configured in GUI.
+- Chart interaction is supported:
+  - Inspect detailed values at a specific timestamp
+  - Select a time range to view range statistics (for example avg/min/max)
+  - Delete data inside a selected time range
+
+
 ## Architecture
 
 PerfDroid follows a 3-layer structure:
@@ -97,6 +108,20 @@ Artifacts are generated under `dist/`, for example:
 - `perfdroid-1.0.0-linux-x86_64.tar.gz`
 - `perfdroid-1.0.0-macos-x86_64.tar.gz`
 - `perfdroid-1.0.0-windows-x86_64.zip`
+
+Each release package includes platform-specific bundled ADB binaries in `adb/`:
+
+- Linux: `adb/adb`
+- macOS: `adb/adb`
+- Windows: `adb/adb.exe` + `AdbWinApi.dll` + `AdbWinUsbApi.dll`
+
+## ADB Permission Notes (Linux / macOS)
+
+If executable permission is lost after extracting archives or moving filesystems, you may see `Permission denied`. Fix with:
+
+```bash
+chmod +x adb/linux/adb adb/mac/adb
+```
 
 ## License
 
