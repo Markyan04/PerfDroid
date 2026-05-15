@@ -389,7 +389,8 @@ impl PerfDroidDemo {
                 .to_string()
         };
 
-        let can_delete = self.selection.is_some() && self.state == SessionState::Paused;
+        let can_delete = self.selection.is_some()
+            && matches!(self.state, SessionState::Paused | SessionState::Stopped);
         let delete_view = view.clone();
         let delete_button = Button::new("delete-selection-top")
             .label("Delete Selection")
@@ -606,8 +607,8 @@ impl PerfDroidDemo {
     }
 
     fn delete_current_selection(&mut self) -> bool {
-        if self.state != SessionState::Paused {
-            self.status_line = "Delete is only allowed in Paused state.".to_string();
+        if !matches!(self.state, SessionState::Paused | SessionState::Stopped) {
+            self.status_line = "Delete is only allowed in Paused or Stopped state.".to_string();
             return false;
         }
         let Some((start_ms, end_ms)) = self.selection_bounds_ms() else {
