@@ -1,8 +1,10 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use std::process::Command;
 
 use crate::storage::{SessionStore, TimestampedBatch};
+use resvg::{tiny_skia, usvg};
 
 const LINE_COLORS: [&str; 10] = [
     "#2563EB", "#F97316", "#10B981", "#DB2777", "#7C3AED", "#0F766E", "#DC2626", "#CA8A04",
@@ -239,7 +241,302 @@ pub fn export_session_to_html(
 }
 
 pub fn export_session_to_png(_path: &Path, _session: &SessionStore) -> Result<usize, String> {
-    Err("PNG export renderer has been removed for full refactor.".to_string())
+    let path = _path;
+    let session = _session;
+    ensure_parent_exists(path)?;
+    if try_screenshot_html_to_png(path, session).is_ok() {
+        return Ok(collect_frames(session).len());
+    }
+
+    let cpu_clock_rows = build_metric_rows(session.cpu_clock_frames(), 1.0);
+    let cpu_usage_rows = build_metric_rows(session.cpu_usage_frames(), 1.0);
+    let temp_rows = build_metric_rows(session.battery_temperature_frames(), 10.0);
+    let fps_rows = build_metric_rows(session.fps_frames(), 1.0);
+    let battery_rows = build_battery_power_rows(session);
+
+    let cpu_clock_lines = detect_line_count(session.latest_cpu_clock().map(|f| &f.batch.values));
+    let cpu_usage_lines = detect_line_count(session.latest_cpu_usage().map(|f| &f.batch.values));
+
+    let mut panels = Vec::new();
+    panels.push((
+        "CPU Clock".to_string(),
+        "Metric: CPU_CLOCK | unit: MHz | fixed width values: 10".to_string(),
+        cpu_clock_rows,
+        (0..cpu_clock_lines)
+            .map(|i| (format!("policy{i}"), LINE_COLORS[i % LINE_COLORS.len()]))
+            .collect::<Vec<_>>(),
+        "MHz".to_string(),
+        build_latest_cards(session.latest_values(), "MHz", "policy"),
+        (0..cpu_clock_lines).collect::<Vec<_>>(),
+    ));
+    panels.push((
+        "CPU Usage".to_string(),
+        "Metric: CPU_USAGE | unit: % | fixed width values: 10".to_string(),
+        cpu_usage_rows,
+        (0..cpu_usage_lines)
+            .map(|i| (format!("policy{i}"), LINE_COLORS[i % LINE_COLORS.len()]))
+            .collect::<Vec<_>>(),
+        "%".to_string(),
+        build_latest_cards(session.latest_cpu_usage_values(), "%", "policy"),
+        (0..cpu_usage_lines).collect::<Vec<_>>(),
+    ));
+    panels.push((
+        "Battery Temperature".to_string(),
+        "Metric: BATTERY_TEMP | unit: 0.1C | collector: battery".to_string(),
+        temp_rows,
+        vec![("battery".to_string(), "#D97706")],
+        "C".to_string(),
+        vec![(
+            "Battery".to_string(),
+            session
+                .latest_battery_temperature_value()
+                .map(|v| format!("{:.1} C", v as f64 / 10.0))
+                .unwrap_or_else(|| "--".to_string()),
+        )],
+        vec![0],
+    ));
+    panels.push((
+        "Battery Power Metrics".to_string(),
+        "Metrics: VOLTAGE / CURRENT / POWER | units: mV, mA, mW | collector: battery"
+            .to_string(),
+        battery_rows,
+        vec![
+            ("voltage (mV)".to_string(), "#2563EB"),
+            ("current (mA)".to_string(), "#10B981"),
+            ("power (mW)".to_string(), "#DB2777"),
+        ],
+        "".to_string(),
+        vec![
+            (
+                "Voltage".to_string(),
+                session
+                    .latest_battery_voltage_value()
+                    .map(|v| format!("{v} mV"))
+                    .unwrap_or_else(|| "--".to_string()),
+            ),
+            (
+                "Current".to_string(),
+                session
+                    .latest_battery_current_value()
+                    .map(|v| format!("{v} mA"))
+                    .unwrap_or_else(|| "--".to_string()),
+            ),
+            (
+                "Power".to_string(),
+                session
+                    .latest_battery_power_value()
+                    .map(|v| format!("{v} mW"))
+                    .unwrap_or_else(|| "--".to_string()),
+            ),
+        ],
+        vec![0, 1, 2],
+    ));
+    panels.push((
+        "FPS".to_string(),
+        "Metric: FPS | unit: FPS | collector: main".to_string(),
+        fps_rows,
+        vec![("main".to_string(), "#DC2626")],
+        "FPS".to_string(),
+        vec![(
+            "FPS".to_string(),
+            session
+                .latest_fps_value()
+                .map(|v| format!("{v} FPS"))
+                .unwrap_or_else(|| "--".to_string()),
+        )],
+        vec![0],
+    ));
+
+    let svg = render_report_svg(&panels);
+    rasterize_svg_to_png(path, &svg)?;
+    Ok(collect_frames(session).len())
+}
+
+fn try_screenshot_html_to_png(path: &Path, session: &SessionStore) -> Result<(), String> {
+    let temp_html = std::env::temp_dir().join(format!(
+        "perfdroid-report-{}.html",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_nanos()
+    ));
+    export_session_to_html(&temp_html, session, 0)?;
+    let html_url = format!("file://{}", temp_html.display());
+    let out = path.to_string_lossy().to_string();
+    let mut commands = Vec::new();
+
+    let mut c1 = Command::new("wkhtmltoimage");
+    c1.arg("--enable-local-file-access")
+        .arg("--quality")
+        .arg("100")
+        .arg(temp_html.display().to_string())
+        .arg(&out);
+    commands.push(c1);
+
+    for bin in ["chromium", "chromium-browser", "google-chrome", "microsoft-edge"] {
+        let mut c = Command::new(bin);
+        c.arg("--headless")
+            .arg("--disable-gpu")
+            .arg("--hide-scrollbars")
+            .arg(format!("--screenshot={out}"))
+            .arg("--window-size=1280,2800")
+            .arg(&html_url);
+        commands.push(c);
+    }
+
+    for mut cmd in commands {
+        if let Ok(status) = cmd.status() {
+            if status.success() && path.exists() {
+                let _ = std::fs::remove_file(&temp_html);
+                return Ok(());
+            }
+        }
+    }
+    let _ = std::fs::remove_file(&temp_html);
+    Err("html screenshot tool unavailable".to_string())
+}
+
+type PanelData = (
+    String,
+    String,
+    Vec<PlotRow>,
+    Vec<(String, &'static str)>,
+    String,
+    Vec<(String, String)>,
+    Vec<usize>,
+);
+
+fn render_report_svg(panels: &[PanelData]) -> String {
+    let width = 1200.0;
+    let panel_height = 420.0;
+    let gap = 20.0;
+    let top = 20.0;
+    let height = top + panels.len() as f64 * (panel_height + gap);
+    let mut s = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\"><style>text{{font-family:Arial,Helvetica,sans-serif;}}</style><rect width=\"100%\" height=\"100%\" fill=\"#F3EBDD\"/>"
+    );
+    for (idx, panel) in panels.iter().enumerate() {
+        let y = top + idx as f64 * (panel_height + gap);
+        let (title, footer, rows, legends, unit, cards, series_indexes) = panel;
+        s.push_str(&format!(
+            "<g transform=\"translate(20,{y})\"><rect x=\"0\" y=\"0\" width=\"1160\" height=\"420\" rx=\"12\" fill=\"#FFF9F1\" stroke=\"#ddd\"/><text x=\"580\" y=\"30\" text-anchor=\"middle\" font-size=\"24\" fill=\"#222\">{}</text>",
+            xml_escape(title)
+        ));
+        s.push_str(&render_cards_svg(cards, 16.0, 48.0));
+        s.push_str(&format!(
+            "<g transform=\"translate(16,112)\">{}</g>",
+            render_line_chart_svg(rows, legends, series_indexes, 1128.0, 220.0, unit)
+        ));
+        s.push_str(&render_legend_svg(legends, 16.0, 340.0));
+        s.push_str(&format!(
+            "<text x=\"16\" y=\"366\" font-size=\"12\" fill=\"#666\">{}</text>",
+            xml_escape(footer)
+        ));
+        let stats = build_series_stats(rows, legends, series_indexes);
+        s.push_str(&render_stats_table_svg(&stats, 16.0, 378.0));
+        s.push_str("</g>");
+    }
+    s.push_str("</svg>");
+    s
+}
+
+fn render_cards_svg(cards: &[(String, String)], x: f64, y: f64) -> String {
+    let mut s = String::new();
+    for (idx, (k, v)) in cards.iter().enumerate() {
+        let cx = x + idx as f64 * 180.0;
+        s.push_str(&format!(
+            "<g transform=\"translate({cx},{y})\"><rect x=\"0\" y=\"0\" width=\"170\" height=\"54\" rx=\"8\" fill=\"#F7EEE0\" stroke=\"#ddd\"/><text x=\"85\" y=\"21\" text-anchor=\"middle\" font-size=\"12\" fill=\"#222\">{}</text><text x=\"85\" y=\"40\" text-anchor=\"middle\" font-size=\"13\" fill=\"#222\">{}</text></g>",
+            xml_escape(k),
+            xml_escape(v)
+        ));
+    }
+    s
+}
+
+fn render_legend_svg(legends: &[(String, &'static str)], x: f64, y: f64) -> String {
+    let mut s = String::new();
+    for (idx, (label, color)) in legends.iter().enumerate() {
+        let lx = x + idx as f64 * 190.0;
+        s.push_str(&format!(
+            "<line x1=\"{lx}\" y1=\"{y}\" x2=\"{}\" y2=\"{y}\" stroke=\"{}\" stroke-width=\"3\"/><text x=\"{}\" y=\"{}\" font-size=\"12\" fill=\"#222\">{}</text>",
+            lx + 14.0,
+            color,
+            lx + 20.0,
+            y + 4.0,
+            xml_escape(label)
+        ));
+    }
+    s
+}
+
+fn render_stats_table_svg(stats: &[SeriesStats], x: f64, y: f64) -> String {
+    let headers = [
+        "series", "avg", "min", "max", "median", "p95", "p99", "stddev", "cv", "range",
+    ];
+    let col_w = [130.0, 90.0, 90.0, 90.0, 90.0, 90.0, 90.0, 90.0, 90.0, 90.0];
+    let row_h = 18.0;
+    let mut s = String::new();
+    let mut x_cursor = x;
+    for (i, h) in headers.iter().enumerate() {
+        s.push_str(&format!(
+            "<rect x=\"{x_cursor}\" y=\"{y}\" width=\"{}\" height=\"{}\" fill=\"#fff\" stroke=\"#ddd\"/><text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"#222\">{}</text>",
+            col_w[i],
+            row_h,
+            x_cursor + 4.0,
+            y + 13.0,
+            h
+        ));
+        x_cursor += col_w[i];
+    }
+    for (r, st) in stats.iter().enumerate() {
+        let ry = y + row_h * (r as f64 + 1.0);
+        let vals = [
+            st.series.clone(),
+            format!("{:.2}", st.avg),
+            format!("{:.2}", st.min),
+            format!("{:.2}", st.max),
+            format!("{:.2}", st.median),
+            format!("{:.2}", st.p95),
+            format!("{:.2}", st.p99),
+            format!("{:.2}", st.stddev),
+            format!("{:.2}%", st.cv * 100.0),
+            format!("{:.2}", st.range),
+        ];
+        let mut cx = x;
+        for (i, v) in vals.iter().enumerate() {
+            s.push_str(&format!(
+                "<rect x=\"{cx}\" y=\"{ry}\" width=\"{}\" height=\"{}\" fill=\"#fff\" stroke=\"#ddd\"/><text x=\"{}\" y=\"{}\" font-size=\"11\" fill=\"#222\">{}</text>",
+                col_w[i],
+                row_h,
+                cx + 4.0,
+                ry + 13.0,
+                xml_escape(v)
+            ));
+            cx += col_w[i];
+        }
+    }
+    s
+}
+
+fn rasterize_svg_to_png(path: &Path, svg: &str) -> Result<(), String> {
+    let mut opt = usvg::Options::default();
+    opt.fontdb_mut().load_system_fonts();
+    let tree = usvg::Tree::from_str(svg, &opt)
+        .map_err(|err| format!("failed to parse report svg: {err}"))?;
+    let size = tree.size().to_int_size();
+    let mut pixmap = tiny_skia::Pixmap::new(size.width(), size.height())
+        .ok_or_else(|| "failed to allocate pixmap".to_string())?;
+    let mut pixmap_mut = pixmap.as_mut();
+    resvg::render(&tree, tiny_skia::Transform::default(), &mut pixmap_mut);
+    pixmap
+        .save_png(path)
+        .map_err(|err| format!("failed to write png `{}`: {err}", path.display()))
+}
+
+fn xml_escape(v: &str) -> String {
+    v.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn render_panel(
@@ -733,7 +1030,14 @@ mod tests {
         assert!(html_text.contains("CPU Clock"));
         assert!(html_text.contains("<th>median</th>"));
 
+        let png_path = base.with_extension("png");
+        let png_rows = export_session_to_png(&png_path, &store).expect("png export");
+        assert_eq!(png_rows, 1);
+        let png_bytes = std::fs::read(&png_path).expect("png bytes");
+        assert!(png_bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]));
+
         let _ = std::fs::remove_file(json_path);
         let _ = std::fs::remove_file(html_path);
+        let _ = std::fs::remove_file(png_path);
     }
 }
