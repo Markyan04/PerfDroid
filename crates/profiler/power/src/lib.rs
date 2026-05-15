@@ -545,9 +545,7 @@ fn detect_current_strategy(
 fn detect_power_strategy(
     device: &mut impl ADBDeviceExt,
 ) -> Result<Option<(PowerReadStrategy, PowerSnapshot)>, CoreError> {
-    for strategy in [
-        PowerReadStrategy::FixedSysfs,
-    ] {
+    for strategy in [PowerReadStrategy::FixedSysfs] {
         let snapshot = query_power_with_strategy(device, strategy);
         if snapshot.power_mw.is_some() {
             return Ok(Some((strategy, snapshot)));
@@ -979,8 +977,8 @@ mod tests {
     use super::{
         PowerSnapshot, best_current_from_power_supply_entries,
         best_voltage_from_power_supply_entries, normalize_current_ma, normalize_voltage_mv,
-        parse_dumpsys_voltage_mv, parse_keyed_value, parse_micharge_line,
-        parse_micharge_snapshot, parse_power_supply_scan,
+        parse_dumpsys_voltage_mv, parse_keyed_value, parse_micharge_line, parse_micharge_snapshot,
+        parse_power_supply_scan,
     };
 
     #[test]

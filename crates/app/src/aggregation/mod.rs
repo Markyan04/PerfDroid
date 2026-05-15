@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use pdcore::CoreError;
 use pdcore::types::MetricBatch;
@@ -130,6 +130,8 @@ impl AggregationWorker {
         let join_handle =
             thread::spawn(move || {
                 let mut next_tick = Instant::now();
+                let step_ms = 1000.0 / hz.max(1) as f64;
+                let mut timeline_ms = 0.0_f64;
 
                 loop {
                     if stop_rx.try_recv().is_ok() {
@@ -140,6 +142,8 @@ impl AggregationWorker {
                         thread::sleep(Duration::from_millis(20));
                         continue;
                     }
+                    let tick_timestamp_ms = timeline_ms.round() as u64;
+                    timeline_ms += step_ms;
 
                     if let Some(profiler) = cpu_clock_profiler.as_ref() {
                         let maybe_batch = profiler.lock().ok().and_then(|profiler| {
@@ -148,7 +152,7 @@ impl AggregationWorker {
 
                         if let Some(batch) = maybe_batch {
                             let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
-                                timestamp_ms: unix_timestamp_ms(),
+                                timestamp_ms: tick_timestamp_ms,
                                 batch,
                             }));
                         }
@@ -161,7 +165,7 @@ impl AggregationWorker {
 
                         if let Some(batch) = maybe_batch {
                             let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
-                                timestamp_ms: unix_timestamp_ms(),
+                                timestamp_ms: tick_timestamp_ms,
                                 batch,
                             }));
                         }
@@ -175,7 +179,7 @@ impl AggregationWorker {
 
                         if let Some(batch) = maybe_batch {
                             let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
-                                timestamp_ms: unix_timestamp_ms(),
+                                timestamp_ms: tick_timestamp_ms,
                                 batch,
                             }));
                         }
@@ -188,7 +192,7 @@ impl AggregationWorker {
 
                         if let Some(batch) = maybe_batch {
                             let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
-                                timestamp_ms: unix_timestamp_ms(),
+                                timestamp_ms: tick_timestamp_ms,
                                 batch,
                             }));
                         }
@@ -201,7 +205,7 @@ impl AggregationWorker {
 
                         if let Some(batch) = maybe_batch {
                             let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
-                                timestamp_ms: unix_timestamp_ms(),
+                                timestamp_ms: tick_timestamp_ms,
                                 batch,
                             }));
                         }
@@ -214,7 +218,7 @@ impl AggregationWorker {
 
                         if let Some(batch) = maybe_batch {
                             let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
-                                timestamp_ms: unix_timestamp_ms(),
+                                timestamp_ms: tick_timestamp_ms,
                                 batch,
                             }));
                         }
@@ -227,7 +231,7 @@ impl AggregationWorker {
 
                         if let Some(batch) = maybe_batch {
                             let _ = tx.send(AggregatorEvent::MetricBatch(TimestampedBatch {
-                                timestamp_ms: unix_timestamp_ms(),
+                                timestamp_ms: tick_timestamp_ms,
                                 batch,
                             }));
                         }
@@ -264,11 +268,4 @@ impl AggregationWorker {
             let _ = join_handle.join();
         }
     }
-}
-
-fn unix_timestamp_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }

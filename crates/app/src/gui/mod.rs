@@ -4,10 +4,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 
+use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Application, Bounds, Context, Entity, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, Subscription, Window, WindowBounds, WindowOptions,
-    div, hsla, px, rgb, size, transparent_black,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Render, SharedString,
+    Styled, Subscription, Window, WindowBounds, WindowOptions, canvas, div, hsla, px, rgb, size,
+    transparent_black,
 };
 use gpui_component::Disableable;
 use gpui_component::Root;
@@ -36,6 +38,7 @@ const CHART_HEIGHT: f32 = 250.0;
 const Y_AXIS_WIDTH: f32 = 72.0;
 const APP_PADDING_X: f32 = 48.0;
 const CHART_SECTION_PADDING_X: f32 = 40.0;
+const CHART_PLOT_INNER_PADDING: f32 = 0.0;
 const LINE_COLORS: [u32; 10] = [
     0x2563EB, 0xF97316, 0x10B981, 0xDB2777, 0x7C3AED, 0x0F766E, 0xDC2626, 0xCA8A04, 0x4F46E5,
     0x0891B2,
@@ -43,8 +46,30 @@ const LINE_COLORS: [u32; 10] = [
 
 #[derive(Clone)]
 struct PlotRow {
+    timestamp_ms: u64,
     time_label: SharedString,
     values: [f64; 10],
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ChartKey {
+    CpuClock,
+    CpuUsage,
+    BatteryTemp,
+    BatteryPowerMetrics,
+    Fps,
+}
+
+#[derive(Clone, Copy)]
+enum SelectionRange {
+    Point(u64),
+    Span { start_ms: u64, end_ms: u64 },
+}
+
+#[derive(Clone, Copy)]
+struct DragSelection {
+    start_ms: u64,
+    current_ms: u64,
 }
 
 pub fn run_demo() {
@@ -89,6 +114,9 @@ struct PerfDroidDemo {
     hz_input: Entity<InputState>,
     _package_input_subscription: Subscription,
     _hz_input_subscription: Subscription,
+    selection: Option<SelectionRange>,
+    drag_selection: Option<DragSelection>,
+    ignore_next_left_click: bool,
 }
 
 impl PerfDroidDemo {
@@ -146,6 +174,9 @@ impl PerfDroidDemo {
             hz_input,
             _package_input_subscription: package_input_subscription,
             _hz_input_subscription: hz_input_subscription,
+            selection: None,
+            drag_selection: None,
+            ignore_next_left_click: false,
         }
     }
 
@@ -160,6 +191,9 @@ impl PerfDroidDemo {
                     self.state = state;
                     if state == SessionState::Connected {
                         self.session = SessionStore::default();
+                        self.selection = None;
+                        self.drag_selection = None;
+                        self.ignore_next_left_click = false;
                     }
                     self.status_line = format!("Session state => {}", state.as_str());
                 }
@@ -187,7 +221,7 @@ impl PerfDroidDemo {
     }
 
     fn build_plot_rows(&self) -> Vec<PlotRow> {
-        let Some(first) = self.session.cpu_clock_frames().first() else {
+        let Some(base_ts) = self.session.global_start_timestamp_ms() else {
             return Vec::new();
         };
 
@@ -195,15 +229,15 @@ impl PerfDroidDemo {
             .cpu_clock_frames()
             .iter()
             .map(|frame| {
-                let elapsed_s =
-                    (frame.timestamp_ms.saturating_sub(first.timestamp_ms)) as f64 / 1000.0;
+                let elapsed_s = (frame.timestamp_ms.saturating_sub(base_ts)) as f64 / 1000.0;
                 let mut values = [0.0; 10];
                 for (idx, value) in frame.batch.values.iter().copied().enumerate().take(10) {
                     values[idx] = if value < 0 { 0.0 } else { value as f64 };
                 }
 
                 PlotRow {
-                    time_label: format!("{elapsed_s:.1}s").into(),
+                    timestamp_ms: frame.timestamp_ms,
+                    time_label: format!("{elapsed_s:.3}s").into(),
                     values,
                 }
             })
@@ -211,7 +245,7 @@ impl PerfDroidDemo {
     }
 
     fn build_fps_rows(&self) -> Vec<PlotRow> {
-        let Some(first) = self.session.fps_frames().first() else {
+        let Some(base_ts) = self.session.global_start_timestamp_ms() else {
             return Vec::new();
         };
 
@@ -219,15 +253,15 @@ impl PerfDroidDemo {
             .fps_frames()
             .iter()
             .map(|frame| {
-                let elapsed_s =
-                    (frame.timestamp_ms.saturating_sub(first.timestamp_ms)) as f64 / 1000.0;
+                let elapsed_s = (frame.timestamp_ms.saturating_sub(base_ts)) as f64 / 1000.0;
                 let mut values = [0.0; 10];
                 if let Some(value) = frame.batch.values.first().copied() {
                     values[0] = if value < 0 { 0.0 } else { value as f64 };
                 }
 
                 PlotRow {
-                    time_label: format!("{elapsed_s:.1}s").into(),
+                    timestamp_ms: frame.timestamp_ms,
+                    time_label: format!("{elapsed_s:.3}s").into(),
                     values,
                 }
             })
@@ -239,15 +273,14 @@ impl PerfDroidDemo {
     }
 
     fn build_single_metric_rows(&self, frames: &[TimestampedBatch], scale: f64) -> Vec<PlotRow> {
-        let Some(first) = frames.first() else {
+        let Some(base_ts) = self.session.global_start_timestamp_ms() else {
             return Vec::new();
         };
 
         frames
             .iter()
             .map(|frame| {
-                let elapsed_s =
-                    (frame.timestamp_ms.saturating_sub(first.timestamp_ms)) as f64 / 1000.0;
+                let elapsed_s = (frame.timestamp_ms.saturating_sub(base_ts)) as f64 / 1000.0;
                 let mut values = [0.0; 10];
                 if let Some(value) = frame.batch.values.first().copied() {
                     values[0] = if value < 0 {
@@ -258,7 +291,8 @@ impl PerfDroidDemo {
                 }
 
                 PlotRow {
-                    time_label: format!("{elapsed_s:.1}s").into(),
+                    timestamp_ms: frame.timestamp_ms,
+                    time_label: format!("{elapsed_s:.3}s").into(),
                     values,
                 }
             })
@@ -278,12 +312,7 @@ impl PerfDroidDemo {
             return Vec::new();
         }
 
-        let first_timestamp_ms = voltage_frames
-            .first()
-            .or_else(|| current_frames.first())
-            .or_else(|| power_frames.first())
-            .map(|frame| frame.timestamp_ms)
-            .unwrap_or(0);
+        let first_timestamp_ms = self.session.global_start_timestamp_ms().unwrap_or(0);
 
         (0..total_rows)
             .map(|idx| {
@@ -309,15 +338,463 @@ impl PerfDroidDemo {
                     .unwrap_or(0.0);
 
                 PlotRow {
-                    time_label: format!("{elapsed_s:.1}s").into(),
+                    timestamp_ms,
+                    time_label: format!("{elapsed_s:.3}s").into(),
                     values,
                 }
             })
             .collect()
     }
 
-    fn render_cpu_clock_chart(&self, chart_width: f32) -> impl IntoElement {
+    fn selection_bounds_ms(&self) -> Option<(u64, u64)> {
+        match self.selection {
+            Some(SelectionRange::Point(ts)) => Some((ts, ts)),
+            Some(SelectionRange::Span { start_ms, end_ms }) => Some((start_ms, end_ms)),
+            None => None,
+        }
+    }
+
+    fn nearest_timestamp_for_rows(rows: &[PlotRow], x_ratio: f32) -> Option<u64> {
+        if rows.is_empty() {
+            return None;
+        }
+        let ratio = x_ratio.clamp(0.0, 1.0);
+        let idx = ((rows.len().saturating_sub(1) as f32) * ratio).round() as usize;
+        rows.get(idx).map(|row| row.timestamp_ms)
+    }
+
+    fn nearest_x_ratio_for_selected(&self, rows: &[PlotRow]) -> Option<f32> {
+        let selected_ts = match self.selection {
+            Some(SelectionRange::Point(ts)) => ts,
+            _ => return None,
+        };
+        let (idx, _) = rows
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, row)| row.timestamp_ms.abs_diff(selected_ts))?;
+        let denom = rows.len().saturating_sub(1).max(1) as f32;
+        Some((idx as f32 / denom).clamp(0.0, 1.0))
+    }
+
+    fn render_selection_summary(&self, view: Entity<Self>, chart_width: f32) -> impl IntoElement {
+        let base_ts = self.session.global_start_timestamp_ms().unwrap_or(0);
+        let text = if let Some((start_ms, end_ms)) = self.selection_bounds_ms() {
+            format!(
+                "Selected range: [{:.3}s, {:.3}s] (inclusive). Long-press left mouse to select range, then delete in Paused state.",
+                start_ms.saturating_sub(base_ts) as f64 / 1000.0,
+                end_ms.saturating_sub(base_ts) as f64 / 1000.0
+            )
+        } else {
+            "No selection. Left click selects nearest point. Left long-press drag selects a range. Deletion is only allowed in Paused state."
+                .to_string()
+        };
+
+        let can_delete = self.selection.is_some()
+            && matches!(self.state, SessionState::Paused | SessionState::Stopped);
+        let delete_view = view.clone();
+        let delete_button = Button::new("delete-selection-top")
+            .label("Delete Selection")
+            .on_click(move |_, _, cx| {
+                let _ = delete_view.update(cx, |this, cx| {
+                    if this.delete_current_selection() {
+                        cx.notify();
+                    } else {
+                        this.status_line = "No active selection to delete.".to_string();
+                        cx.notify();
+                    }
+                });
+            })
+            .disabled(!can_delete);
+
+        div()
+            .w(px(chart_width))
+            .p_3()
+            .rounded_md()
+            .border_1()
+            .bg(rgb(0xE8F3FF))
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .child(div().flex_1().child(text))
+            .child(div().w(px(180.0)).child(delete_button))
+    }
+
+    fn render_selection_details(&self, chart_width: f32) -> impl IntoElement {
+        let base_ts = self.session.global_start_timestamp_ms().unwrap_or(0);
+        let mut lines = Vec::new();
+        match self.selection {
+            Some(SelectionRange::Point(ts)) => {
+                lines.push(format!(
+                    "Point @ {:.3}s",
+                    ts.saturating_sub(base_ts) as f64 / 1000.0
+                ));
+                lines.extend(self.describe_point(
+                    "CPU_CLOCK",
+                    self.session.cpu_clock_frames(),
+                    ts,
+                    1.0,
+                ));
+                lines.extend(self.describe_point(
+                    "CPU_USAGE",
+                    self.session.cpu_usage_frames(),
+                    ts,
+                    1.0,
+                ));
+                lines.extend(self.describe_point("FPS", self.session.fps_frames(), ts, 1.0));
+                lines.extend(self.describe_point(
+                    "BATTERY_TEMP",
+                    self.session.battery_temperature_frames(),
+                    ts,
+                    10.0,
+                ));
+                lines.extend(self.describe_point(
+                    "VOLTAGE",
+                    self.session.battery_voltage_frames(),
+                    ts,
+                    1.0,
+                ));
+                lines.extend(self.describe_point(
+                    "CURRENT",
+                    self.session.battery_current_frames(),
+                    ts,
+                    1.0,
+                ));
+                lines.extend(self.describe_point(
+                    "POWER",
+                    self.session.battery_power_frames(),
+                    ts,
+                    1.0,
+                ));
+            }
+            Some(SelectionRange::Span { start_ms, end_ms }) => {
+                lines.push(format!(
+                    "Range [{:.3}s, {:.3}s] avg/min/max",
+                    start_ms.saturating_sub(base_ts) as f64 / 1000.0,
+                    end_ms.saturating_sub(base_ts) as f64 / 1000.0
+                ));
+                lines.extend(self.describe_range(
+                    "CPU_CLOCK",
+                    self.session.cpu_clock_frames(),
+                    start_ms,
+                    end_ms,
+                    1.0,
+                ));
+                lines.extend(self.describe_range(
+                    "CPU_USAGE",
+                    self.session.cpu_usage_frames(),
+                    start_ms,
+                    end_ms,
+                    1.0,
+                ));
+                lines.extend(self.describe_range(
+                    "FPS",
+                    self.session.fps_frames(),
+                    start_ms,
+                    end_ms,
+                    1.0,
+                ));
+                lines.extend(self.describe_range(
+                    "BATTERY_TEMP",
+                    self.session.battery_temperature_frames(),
+                    start_ms,
+                    end_ms,
+                    10.0,
+                ));
+                lines.extend(self.describe_range(
+                    "VOLTAGE",
+                    self.session.battery_voltage_frames(),
+                    start_ms,
+                    end_ms,
+                    1.0,
+                ));
+                lines.extend(self.describe_range(
+                    "CURRENT",
+                    self.session.battery_current_frames(),
+                    start_ms,
+                    end_ms,
+                    1.0,
+                ));
+                lines.extend(self.describe_range(
+                    "POWER",
+                    self.session.battery_power_frames(),
+                    start_ms,
+                    end_ms,
+                    1.0,
+                ));
+            }
+            None => lines.push("Selection details will appear here.".to_string()),
+        }
+
+        div()
+            .w(px(chart_width))
+            .p_3()
+            .rounded_md()
+            .border_1()
+            .bg(rgb(0xF2FAFF))
+            .flex()
+            .flex_col()
+            .gap_1()
+            .children(lines.into_iter().map(|line| div().text_sm().child(line)))
+    }
+
+    fn describe_point(
+        &self,
+        name: &str,
+        frames: &[TimestampedBatch],
+        ts: u64,
+        scale: f64,
+    ) -> Vec<String> {
+        let Some(frame) = frames.iter().min_by_key(|f| f.timestamp_ms.abs_diff(ts)) else {
+            return vec![format!("{name}: --")];
+        };
+        let mut parts = Vec::new();
+        for (idx, value) in frame.batch.values.iter().copied().enumerate() {
+            if value < 0 {
+                continue;
+            }
+            parts.push(format!("v{idx}={:.2}", value as f64 / scale.max(1.0)));
+        }
+        if parts.is_empty() {
+            vec![format!("{name}: --")]
+        } else {
+            vec![format!("{name}: {}", parts.join(", "))]
+        }
+    }
+
+    fn describe_range(
+        &self,
+        name: &str,
+        frames: &[TimestampedBatch],
+        start_ms: u64,
+        end_ms: u64,
+        scale: f64,
+    ) -> Vec<String> {
+        let in_range: Vec<&TimestampedBatch> = frames
+            .iter()
+            .filter(|f| f.timestamp_ms >= start_ms && f.timestamp_ms <= end_ms)
+            .collect();
+        if in_range.is_empty() {
+            return vec![format!("{name}: --")];
+        }
+        let mut lines = Vec::new();
+        for idx in 0..10 {
+            let mut vals = Vec::new();
+            for frame in &in_range {
+                if let Some(value) = frame.batch.values.get(idx).copied() {
+                    if value >= 0 {
+                        vals.push(value as f64 / scale.max(1.0));
+                    }
+                }
+            }
+            if vals.is_empty() {
+                continue;
+            }
+            let sum: f64 = vals.iter().sum();
+            let avg = sum / vals.len() as f64;
+            let min = vals.iter().copied().fold(f64::INFINITY, f64::min);
+            let max = vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            lines.push(format!(
+                "{name}[v{idx}] avg={avg:.2} min={min:.2} max={max:.2}"
+            ));
+        }
+        if lines.is_empty() {
+            vec![format!("{name}: --")]
+        } else {
+            lines
+        }
+    }
+
+    fn delete_current_selection(&mut self) -> bool {
+        if !matches!(self.state, SessionState::Paused | SessionState::Stopped) {
+            self.status_line = "Delete is only allowed in Paused or Stopped state.".to_string();
+            return false;
+        }
+        let Some((start_ms, end_ms)) = self.selection_bounds_ms() else {
+            return false;
+        };
+        let base_ts = self.session.global_start_timestamp_ms().unwrap_or(0);
+        self.session.delete_range(start_ms, end_ms);
+        self.selection = None;
+        self.drag_selection = None;
+        self.status_line = format!(
+            "Deleted selected range [{:.3}s, {:.3}s] across all profilers.",
+            start_ms.saturating_sub(base_ts) as f64 / 1000.0,
+            end_ms.saturating_sub(base_ts) as f64 / 1000.0
+        );
+        true
+    }
+
+    fn selection_overlay_position(&self, rows: &[PlotRow]) -> Option<(f32, f32, bool)> {
+        let (start, end, is_point) = match self.selection {
+            Some(SelectionRange::Point(ts)) => (ts, ts, true),
+            Some(SelectionRange::Span { start_ms, end_ms }) => (start_ms, end_ms, false),
+            None => return None,
+        };
+        if is_point {
+            let x = self.nearest_x_ratio_for_selected(rows).unwrap_or(0.0);
+            return Some((x, 0.0, true));
+        }
+        let first = rows.first()?.timestamp_ms;
+        let last = rows.last()?.timestamp_ms.max(first + 1);
+        let total = (last - first) as f32;
+        let left = ((start.saturating_sub(first)) as f32 / total).clamp(0.0, 1.0);
+        let right = ((end.saturating_sub(first)) as f32 / total).clamp(0.0, 1.0);
+        Some((left, (right - left).max(0.0), false))
+    }
+
+    fn interactive_plot(
+        &self,
+        view: Entity<Self>,
+        chart_key: ChartKey,
+        rows: Vec<PlotRow>,
+        plot_width: f32,
+        plot: impl IntoElement,
+    ) -> impl IntoElement {
+        let down_rows = rows.clone();
+        let move_rows = rows.clone();
+        let up_rows = rows.clone();
+        let overlay = self.selection_overlay_position(&rows);
+        div()
+            .relative()
+            .w(px(plot_width))
+            .h(px(CHART_HEIGHT))
+            .border_1()
+            .rounded_md()
+            .p(px(CHART_PLOT_INNER_PADDING))
+            .child(plot)
+            .when_some(overlay, |this, (left, width, is_point): (f32, f32, bool)| {
+                if is_point {
+                    this.child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left(px((plot_width * left - 1.0).max(0.0)))
+                            .w(px(2.0))
+                            .bg(hsla(0.58, 0.75, 0.65, 0.65)),
+                    )
+                } else {
+                    this.child(
+                        div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left(px(plot_width * left))
+                            .w(px((plot_width * width).max(2.0)))
+                            .bg(hsla(0.58, 0.75, 0.65, 0.22)),
+                    )
+                }
+            })
+            .child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, _, window, _| {
+                        let view_down = view.clone();
+                        let rows_down = down_rows.clone();
+                        window.on_mouse_event(move |ev: &MouseDownEvent, _, _, cx| {
+                            if !bounds.contains(&ev.position) {
+                                return;
+                            }
+                            let ratio = ((ev.position.x - bounds.origin.x) / bounds.size.width)
+                                .clamp(0.0, 1.0);
+                            match ev.button {
+                                MouseButton::Left => {
+                                    if let Some(ts) =
+                                        PerfDroidDemo::nearest_timestamp_for_rows(&rows_down, ratio)
+                                    {
+                                        let _ = view_down.update(cx, |this, _| {
+                                            if this.ignore_next_left_click {
+                                                this.ignore_next_left_click = false;
+                                                return;
+                                            }
+                                            this.selection = Some(SelectionRange::Point(ts));
+                                            this.drag_selection = Some(DragSelection {
+                                                start_ms: ts,
+                                                current_ms: ts,
+                                            });
+                                        });
+                                    }
+                                }
+                                MouseButton::Right => {
+                                    let _ = view_down.update(cx, |this, _| {
+                                        this.ignore_next_left_click = true;
+                                        this.status_line = "Right-click menu opened. Choose Delete Selected Range."
+                                            .to_string();
+                                    });
+                                }
+                                _ => {}
+                            }
+                        });
+
+                        let view_move = view.clone();
+                        let rows_move = move_rows.clone();
+                        window.on_mouse_event(move |ev: &MouseMoveEvent, _, _, cx| {
+                            if !ev.dragging() {
+                                return;
+                            }
+                            let ratio = ((ev.position.x - bounds.origin.x) / bounds.size.width)
+                                .clamp(0.0, 1.0);
+                            if let Some(ts) =
+                                PerfDroidDemo::nearest_timestamp_for_rows(&rows_move, ratio)
+                            {
+                                let _ = view_move.update(cx, |this, _| {
+                                    if let Some(drag) = this.drag_selection.as_mut() {
+                                        drag.current_ms = ts;
+                                    }
+                                });
+                            }
+                        });
+
+                        let view_up = view.clone();
+                        let rows_up = up_rows.clone();
+                        window.on_mouse_event(move |ev: &MouseUpEvent, _, _, cx| {
+                            if ev.button != MouseButton::Left {
+                                return;
+                            }
+                            let ratio = ((ev.position.x - bounds.origin.x) / bounds.size.width)
+                                .clamp(0.0, 1.0);
+                            let Some(ts) =
+                                PerfDroidDemo::nearest_timestamp_for_rows(&rows_up, ratio)
+                            else {
+                                return;
+                            };
+                            let _ = view_up.update(cx, |this, _| {
+                                let Some(drag) = this.drag_selection.take() else {
+                                    return;
+                                };
+                                let start = drag.start_ms.min(ts).min(drag.current_ms);
+                                let end = drag.start_ms.max(ts).max(drag.current_ms);
+                                if start == end {
+                                    this.selection = Some(SelectionRange::Point(start));
+                                } else {
+                                    this.selection = Some(SelectionRange::Span {
+                                        start_ms: start,
+                                        end_ms: end,
+                                    });
+                                }
+                                this.status_line = format!(
+                                    "Selection updated on {:?}: [{:.3}s, {:.3}s]",
+                                    chart_key,
+                                    start as f64 / 1000.0,
+                                    end as f64 / 1000.0
+                                );
+                            });
+                        });
+                    },
+                )
+                .absolute()
+                .top_0()
+                .left_0()
+                .right_0()
+                .bottom_0(),
+            )
+    }
+
+    fn render_cpu_clock_chart(&self, view: Entity<Self>, chart_width: f32) -> impl IntoElement {
         let rows = self.build_plot_rows();
+        let chart_rows = rows.clone();
         let max_value = rows
             .iter()
             .flat_map(|row| row.values.iter().copied())
@@ -364,15 +841,13 @@ impl PerfDroidDemo {
                     .flex_row()
                     .gap_2()
                     .child(render_y_axis(max_value, "MHz"))
-                    .child(
-                        div()
-                            .w(px(plot_width))
-                            .h(px(CHART_HEIGHT))
-                            .border_1()
-                            .rounded_md()
-                            .p_2()
-                            .child(chart),
-                    ),
+                    .child(self.interactive_plot(
+                        view,
+                        ChartKey::CpuClock,
+                        chart_rows,
+                        plot_width,
+                        chart,
+                    )),
             )
             .child(render_legend((0..line_count).map(|idx| {
                 (format!("policy{idx}"), LINE_COLORS[idx % LINE_COLORS.len()])
@@ -382,8 +857,9 @@ impl PerfDroidDemo {
             ))
     }
 
-    fn render_fps_chart(&self, chart_width: f32) -> impl IntoElement {
+    fn render_fps_chart(&self, view: Entity<Self>, chart_width: f32) -> impl IntoElement {
         let rows = self.build_fps_rows();
+        let chart_rows = rows.clone();
         let max_value = rows.iter().map(|row| row.values[0]).fold(0.0_f64, f64::max);
         let tick_margin = (rows.len() / 12).max(1);
         let plot_width = (chart_width - Y_AXIS_WIDTH).max(320.0);
@@ -415,15 +891,13 @@ impl PerfDroidDemo {
                     .flex_row()
                     .gap_2()
                     .child(render_y_axis(max_value, "FPS"))
-                    .child(
-                        div()
-                            .w(px(plot_width))
-                            .h(px(CHART_HEIGHT))
-                            .border_1()
-                            .rounded_md()
-                            .p_2()
-                            .child(chart),
-                    ),
+                    .child(self.interactive_plot(
+                        view,
+                        ChartKey::Fps,
+                        chart_rows,
+                        plot_width,
+                        chart,
+                    )),
             )
             .child(render_legend(std::iter::once((
                 "main".to_string(),
@@ -432,8 +906,13 @@ impl PerfDroidDemo {
             .child(chart_footer("Metric: FPS | unit: FPS | collector: main"))
     }
 
-    fn render_battery_temperature_chart(&self, chart_width: f32) -> impl IntoElement {
+    fn render_battery_temperature_chart(
+        &self,
+        view: Entity<Self>,
+        chart_width: f32,
+    ) -> impl IntoElement {
         let rows = self.build_battery_temperature_rows();
+        let chart_rows = rows.clone();
         let max_value = rows
             .iter()
             .map(|row| row.values[0])
@@ -469,15 +948,13 @@ impl PerfDroidDemo {
                     .flex_row()
                     .gap_2()
                     .child(render_decimal_y_axis(max_value, "C"))
-                    .child(
-                        div()
-                            .w(px(plot_width))
-                            .h(px(CHART_HEIGHT))
-                            .border_1()
-                            .rounded_md()
-                            .p_2()
-                            .child(chart),
-                    ),
+                    .child(self.interactive_plot(
+                        view,
+                        ChartKey::BatteryTemp,
+                        chart_rows,
+                        plot_width,
+                        chart,
+                    )),
             )
             .child(render_legend(std::iter::once((
                 "battery".to_string(),
@@ -488,8 +965,13 @@ impl PerfDroidDemo {
             ))
     }
 
-    fn render_battery_power_metrics_chart(&self, chart_width: f32) -> impl IntoElement {
+    fn render_battery_power_metrics_chart(
+        &self,
+        view: Entity<Self>,
+        chart_width: f32,
+    ) -> impl IntoElement {
         let rows = self.build_battery_power_metric_rows();
+        let chart_rows = rows.clone();
         let voltage_enabled = !self.session.battery_voltage_frames().is_empty();
         let current_enabled = !self.session.battery_current_frames().is_empty();
         let power_enabled = !self.session.battery_power_frames().is_empty();
@@ -565,15 +1047,13 @@ impl PerfDroidDemo {
                     .flex_row()
                     .gap_2()
                     .child(render_numeric_y_axis(max_value))
-                    .child(
-                        div()
-                            .w(px(plot_width))
-                            .h(px(CHART_HEIGHT))
-                            .border_1()
-                            .rounded_md()
-                            .p_2()
-                            .child(chart),
-                    ),
+                    .child(self.interactive_plot(
+                        view,
+                        ChartKey::BatteryPowerMetrics,
+                        chart_rows,
+                        plot_width,
+                        chart,
+                    )),
             )
             .child(render_legend(legend_items))
             .child(chart_footer(
@@ -582,7 +1062,7 @@ impl PerfDroidDemo {
     }
 
     fn build_cpu_usage_rows(&self) -> Vec<PlotRow> {
-        let Some(first) = self.session.cpu_usage_frames().first() else {
+        let Some(base_ts) = self.session.global_start_timestamp_ms() else {
             return Vec::new();
         };
 
@@ -590,23 +1070,24 @@ impl PerfDroidDemo {
             .cpu_usage_frames()
             .iter()
             .map(|frame| {
-                let elapsed_s =
-                    (frame.timestamp_ms.saturating_sub(first.timestamp_ms)) as f64 / 1000.0;
+                let elapsed_s = (frame.timestamp_ms.saturating_sub(base_ts)) as f64 / 1000.0;
                 let mut values = [0.0; 10];
                 for (idx, value) in frame.batch.values.iter().copied().enumerate().take(10) {
                     values[idx] = if value < 0 { 0.0 } else { value as f64 };
                 }
 
                 PlotRow {
-                    time_label: format!("{elapsed_s:.1}s").into(),
+                    timestamp_ms: frame.timestamp_ms,
+                    time_label: format!("{elapsed_s:.3}s").into(),
                     values,
                 }
             })
             .collect()
     }
 
-    fn render_cpu_usage_chart(&self, chart_width: f32) -> impl IntoElement {
+    fn render_cpu_usage_chart(&self, view: Entity<Self>, chart_width: f32) -> impl IntoElement {
         let rows = self.build_cpu_usage_rows();
+        let chart_rows = rows.clone();
         let max_value = rows
             .iter()
             .flat_map(|row| row.values.iter().copied())
@@ -654,15 +1135,13 @@ impl PerfDroidDemo {
                     .flex_row()
                     .gap_2()
                     .child(render_y_axis(max_value, "%"))
-                    .child(
-                        div()
-                            .w(px(plot_width))
-                            .h(px(CHART_HEIGHT))
-                            .border_1()
-                            .rounded_md()
-                            .p_2()
-                            .child(chart),
-                    ),
+                    .child(self.interactive_plot(
+                        view,
+                        ChartKey::CpuUsage,
+                        chart_rows,
+                        plot_width,
+                        chart,
+                    )),
             )
             .child(render_legend((0..line_count).map(|idx| {
                 (format!("policy{idx}"), LINE_COLORS[idx % LINE_COLORS.len()])
@@ -877,8 +1356,9 @@ impl PerfDroidDemo {
             .label("Export JSON")
             .on_click(move |_, _, cx| {
                 if !matches!(export_state, SessionState::Paused | SessionState::Stopped) {
-                    export_runtime
-                        .request_status("JSON export is only available in Paused or Stopped state.");
+                    export_runtime.request_status(
+                        "JSON export is only available in Paused or Stopped state.",
+                    );
                     return;
                 }
                 let initial_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -929,8 +1409,9 @@ impl PerfDroidDemo {
             .label("Export HTML")
             .on_click(move |_, _, cx| {
                 if !matches!(export_state, SessionState::Paused | SessionState::Stopped) {
-                    export_runtime
-                        .request_status("HTML export is only available in Paused or Stopped state.");
+                    export_runtime.request_status(
+                        "HTML export is only available in Paused or Stopped state.",
+                    );
                     return;
                 }
                 let initial_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -1268,9 +1749,10 @@ impl PerfDroidDemo {
 }
 
 impl Render for PerfDroidDemo {
-    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.drain_events();
         window.request_animation_frame();
+        let view = cx.entity().clone();
         let window_width = f32::from(window.bounds().size.width);
         let content_width = (window_width - APP_PADDING_X).max(360.0);
         let panel_width = if content_width >= 1100.0 {
@@ -1305,19 +1787,29 @@ impl Render for PerfDroidDemo {
                         .child(self.render_control_part(panel_width)),
                 )
                 .child(div().h(px(20.0)))
-                .child(chart_section(self.render_cpu_clock_chart(chart_width)))
-                .child(div().h(px(12.0)))
-                .child(chart_section(self.render_cpu_usage_chart(chart_width)))
-                .child(div().h(px(12.0)))
                 .child(chart_section(
-                    self.render_battery_temperature_chart(chart_width),
+                    self.render_selection_summary(view.clone(), chart_width),
+                ))
+                .child(div().h(px(8.0)))
+                .child(chart_section(self.render_selection_details(chart_width)))
+                .child(div().h(px(8.0)))
+                .child(chart_section(
+                    self.render_cpu_clock_chart(view.clone(), chart_width),
                 ))
                 .child(div().h(px(12.0)))
                 .child(chart_section(
-                    self.render_battery_power_metrics_chart(chart_width),
+                    self.render_cpu_usage_chart(view.clone(), chart_width),
                 ))
                 .child(div().h(px(12.0)))
-                .child(chart_section(self.render_fps_chart(chart_width))),
+                .child(chart_section(
+                    self.render_battery_temperature_chart(view.clone(), chart_width),
+                ))
+                .child(div().h(px(12.0)))
+                .child(chart_section(
+                    self.render_battery_power_metrics_chart(view.clone(), chart_width),
+                ))
+                .child(div().h(px(12.0)))
+                .child(chart_section(self.render_fps_chart(view, chart_width))),
         );
 
         if self.is_busy {
