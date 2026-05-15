@@ -2,6 +2,7 @@
 name = "app"
 version.workspace = true
 edition.workspace = true
+build = "build.rs"
 
 [dependencies]
 adb_client.workspace = true
@@ -15,3 +16,6 @@ profiler-power = { path = "../profiler/power" }
 profiler-temperature = { path = "../profiler/temperature" }
 registry = { path = "../registry" }
 resvg = "0.45.1"
+
+[build-dependencies]
+embed-resource = "3.0.8"

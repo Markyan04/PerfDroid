@@ -39,6 +39,7 @@ const Y_AXIS_WIDTH: f32 = 72.0;
 const APP_PADDING_X: f32 = 48.0;
 const CHART_SECTION_PADDING_X: f32 = 40.0;
 const CHART_PLOT_INNER_PADDING: f32 = 0.0;
+const APP_ID: &str = "perfdroid";
 const LINE_COLORS: [u32; 10] = [
     0x2563EB, 0xF97316, 0x10B981, 0xDB2777, 0x7C3AED, 0x0F766E, 0xDC2626, 0xCA8A04, 0x4F46E5,
     0x0891B2,
@@ -85,6 +86,7 @@ pub fn run_demo() {
                 size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)),
                 cx,
             ))),
+            app_id: Some(APP_ID.to_string()),
             ..Default::default()
         };
 

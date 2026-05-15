@@ -39,6 +39,8 @@ macos_dir="$contents_dir/MacOS"
 resources_dir="$contents_dir/Resources"
 archive_path="$dist_dir/$package_name.tar.gz"
 target_bin="$repo_root/target/$target_triple/release/$app_crate"
+icon_source="$repo_root/assets/icons/app.icns"
+bundle_icon_name="$app_name.icns"
 
 mkdir -p "$dist_dir"
 rm -rf "$package_dir" "$archive_path"
@@ -49,6 +51,7 @@ mkdir -p "$macos_dir" "$resources_dir/adb/mac"
 
 cp "$target_bin" "$macos_dir/$app_name"
 cp "$repo_root/adb/mac/adb" "$resources_dir/adb/mac/adb"
+cp "$icon_source" "$resources_dir/$bundle_icon_name"
 chmod +x "$macos_dir/$app_name" "$resources_dir/adb/mac/adb"
 
 cat > "$contents_dir/Info.plist" <<EOF
@@ -60,12 +63,16 @@ cat > "$contents_dir/Info.plist" <<EOF
     <string>en</string>
     <key>CFBundleExecutable</key>
     <string>$app_name</string>
+    <key>CFBundleDisplayName</key>
+    <string>PerfDroid</string>
     <key>CFBundleIdentifier</key>
     <string>com.perfdroid.$app_name</string>
+    <key>CFBundleIconFile</key>
+    <string>$bundle_icon_name</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>$app_name</string>
+    <string>PerfDroid</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -74,6 +81,8 @@ cat > "$contents_dir/Info.plist" <<EOF
     <string>$version</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
 </dict>
 </plist>
 EOF

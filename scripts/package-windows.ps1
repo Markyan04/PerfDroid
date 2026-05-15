@@ -42,11 +42,14 @@ $packageName = "$AppName-$Version-windows-x86_64"
 $packageDir = Join-Path $distDir $packageName
 $packageDirFresh = Join-Path $distDir "$packageName.__fresh"
 $zipPath = Join-Path $distDir "$packageName.zip"
-$stagingRoot = Join-Path $repoRoot "target\packaging"
+$stagingRoot = Join-Path $distDir ".staging"
 $stagingDir = Join-Path $stagingRoot "$packageName-$([guid]::NewGuid().ToString('N'))"
+$iconSource = Join-Path $repoRoot "assets\icons\app.ico"
 
 New-Item -ItemType Directory -Path $distDir -Force | Out-Null
+New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $stagingDir "adb\win") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $stagingDir "icons") -Force | Out-Null
 
 $fxcPath = Find-FxcPath
 if ($fxcPath) {
@@ -64,6 +67,7 @@ Copy-Item -LiteralPath (Join-Path $targetDir "$AppCrate.exe") -Destination (Join
 Copy-Item -LiteralPath (Join-Path $repoRoot "adb\win\adb.exe") -Destination (Join-Path $stagingDir "adb\win\adb.exe") -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "adb\win\AdbWinApi.dll") -Destination (Join-Path $stagingDir "adb\win\AdbWinApi.dll") -Force
 Copy-Item -LiteralPath (Join-Path $repoRoot "adb\win\AdbWinUsbApi.dll") -Destination (Join-Path $stagingDir "adb\win\AdbWinUsbApi.dll") -Force
+Copy-Item -LiteralPath $iconSource -Destination (Join-Path $stagingDir "icons\$AppName.ico") -Force
 
 if (Test-Path $zipPath) {
     Remove-Item -LiteralPath $zipPath -Force

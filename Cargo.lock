@@ -105,6 +105,7 @@ name = "app"
 version = "1.0.0"
 dependencies = [
  "adb_client",
+ "embed-resource",
  "gpui",
  "gpui-component",
  "pdcore",

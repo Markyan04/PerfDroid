@@ -115,6 +115,12 @@ Each release package includes platform-specific bundled ADB binaries in `adb/`:
 - macOS: `adb/adb`
 - Windows: `adb/adb.exe` + `AdbWinApi.dll` + `AdbWinUsbApi.dll`
 
+Release packages now also include platform-native app icons:
+
+- Linux: `share/applications/perfdroid.desktop` plus `share/icons/hicolor/*/apps/perfdroid.png`
+- macOS: `perfdroid.app/Contents/Resources/perfdroid.icns`
+- Windows: icon resources embedded into `perfdroid.exe`, plus `icons/perfdroid.ico` in the zip
+
 ## ADB Permission Notes (Linux / macOS)
 
 If executable permission is lost after extracting archives or moving filesystems, you may see `Permission denied`. Fix with:
