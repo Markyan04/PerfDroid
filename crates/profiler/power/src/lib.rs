@@ -18,18 +18,12 @@ use crate::metadata::{
 };
 
 const BATTERY_DUMP_COMMAND: &str = "dumpsys battery";
-const BATTERY_PROPERTIES_DUMP_COMMAND: &str = "dumpsys batteryproperties";
-const BATTERYSTATS_DUMP_COMMAND: &str = "dumpsys batterystats";
 const UEVENT_GLOB_PATTERN: &str = "/sys/class/power_supply/*/uevent";
 const MICHARGE_LOGCAT_COMMAND: &str = "logcat -d -b system -s IMiCharge:E | tail -n 256";
 const XIAOMI_BATTERY_VOLTAGE_PATH: &str =
     "/sys/devices/platform/soc/soc:mca_business_battery/power_supply/battery/voltage_now";
 const XIAOMI_BATTERY_CURRENT_NOW_PATH: &str =
     "/sys/devices/platform/soc/soc:mca_business_battery/power_supply/battery/current_now";
-const XIAOMI_BATTERY_CURRENT_AVG_PATH: &str =
-    "/sys/devices/platform/soc/soc:mca_business_battery/power_supply/battery/current_avg";
-const XIAOMI_BATTERY_CURRENT_UA_PATH: &str =
-    "/sys/devices/platform/soc/soc:mca_business_battery/power_supply/battery/batt_current_ua_now";
 const POWER_SUPPLY_SCAN_COMMAND: &str = r#"for d in /sys/class/power_supply/* "$(readlink -f /sys/class/power_supply/battery 2>/dev/null)" /sys/devices/platform/soc/soc:mca_business_battery/power_supply/battery; do
   [ -n "$d" ] || continue;
   [ -d "$d" ] || continue;
@@ -48,44 +42,15 @@ const VOLTAGE_PATHS: [&str; 5] = [
     "/sys/class/power_supply/bms/voltage_now",
     XIAOMI_BATTERY_VOLTAGE_PATH,
 ];
-const CURRENT_PATHS: [&str; 11] = [
+const CURRENT_PATHS: [&str; 5] = [
     "/sys/class/power_supply/battery/current_now",
     "/sys/class/power_supply/Battery/current_now",
     "/sys/class/power_supply/maxfg/current_now",
     "/sys/class/power_supply/bms/current_now",
-    "/sys/class/power_supply/battery/batt_current_ua_now",
-    "/sys/class/power_supply/Battery/batt_current_ua_now",
-    "/sys/class/power_supply/battery/current_avg",
-    "/sys/class/power_supply/Battery/current_avg",
     XIAOMI_BATTERY_CURRENT_NOW_PATH,
-    XIAOMI_BATTERY_CURRENT_AVG_PATH,
-    XIAOMI_BATTERY_CURRENT_UA_PATH,
 ];
 const VOLTAGE_GLOB_PATTERNS: [&str; 1] = ["/sys/class/power_supply/*/voltage_now"];
-const CURRENT_GLOB_PATTERNS: [&str; 3] = [
-    "/sys/class/power_supply/*/current_now",
-    "/sys/class/power_supply/*/current_avg",
-    "/sys/class/power_supply/*/batt_current_ua_now",
-];
-const CURRENT_DUMPSYS_LABELS: [&str; 10] = [
-    "current now:",
-    "current_now:",
-    "current average:",
-    "current_average:",
-    "battery current now:",
-    "battery current average:",
-    "currentnow:",
-    "currentaverage:",
-    "batterycurrentnow:",
-    "batterycurrentaverage:",
-];
 const UEVENT_VOLTAGE_KEYS: [&str; 2] = ["POWER_SUPPLY_VOLTAGE_NOW", "POWER_SUPPLY_VOLTAGE_OCV"];
-const UEVENT_CURRENT_KEYS: [&str; 3] = [
-    "POWER_SUPPLY_CURRENT_NOW",
-    "POWER_SUPPLY_CURRENT_AVG",
-    "POWER_SUPPLY_BATT_CURRENT_UA_NOW",
-];
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VoltageReadStrategy {
     FixedSysfs,
@@ -112,26 +77,12 @@ impl VoltageReadStrategy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CurrentReadStrategy {
     FixedSysfs,
-    GlobSysfs,
-    PowerSupplyScan,
-    Uevent,
-    DumpsysBatteryProperties,
-    DumpsysBattery,
-    MiChargeLogcat,
-    DumpsysBatterystats,
 }
 
 impl CurrentReadStrategy {
     fn label(self) -> &'static str {
         match self {
             Self::FixedSysfs => "sysfs fixed path",
-            Self::GlobSysfs => "sysfs glob path",
-            Self::PowerSupplyScan => "power_supply directory scan",
-            Self::Uevent => "power_supply uevent",
-            Self::DumpsysBatteryProperties => "dumpsys batteryproperties",
-            Self::DumpsysBattery => "dumpsys battery",
-            Self::MiChargeLogcat => "xiaomi micharge logcat",
-            Self::DumpsysBatterystats => "dumpsys batterystats",
         }
     }
 }
@@ -139,13 +90,6 @@ impl CurrentReadStrategy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PowerReadStrategy {
     FixedSysfs,
-    GlobSysfs,
-    PowerSupplyScan,
-    Uevent,
-    BatteryPropertiesMixed,
-    BatteryMixed,
-    MiChargeLogcat,
-    BatteryStatsMixed,
     Hybrid {
         voltage: VoltageReadStrategy,
         current: CurrentReadStrategy,
@@ -156,15 +100,6 @@ impl PowerReadStrategy {
     fn label(self) -> String {
         match self {
             Self::FixedSysfs => "fixed sysfs pair".to_string(),
-            Self::GlobSysfs => "glob sysfs pair".to_string(),
-            Self::PowerSupplyScan => "power_supply directory scan pair".to_string(),
-            Self::Uevent => "power_supply uevent pair".to_string(),
-            Self::BatteryPropertiesMixed => {
-                "dumpsys battery voltage + batteryproperties current".to_string()
-            }
-            Self::BatteryMixed => "dumpsys battery pair".to_string(),
-            Self::MiChargeLogcat => "xiaomi micharge logcat pair".to_string(),
-            Self::BatteryStatsMixed => "dumpsys battery voltage + batterystats current".to_string(),
             Self::Hybrid { voltage, current } => {
                 format!(
                     "hybrid: voltage via {}, current via {}",
@@ -600,19 +535,9 @@ fn detect_voltage_strategy(
 fn detect_current_strategy(
     device: &mut impl ADBDeviceExt,
 ) -> Result<Option<(CurrentReadStrategy, i64)>, CoreError> {
-    for strategy in [
-        CurrentReadStrategy::FixedSysfs,
-        CurrentReadStrategy::GlobSysfs,
-        CurrentReadStrategy::PowerSupplyScan,
-        CurrentReadStrategy::Uevent,
-        CurrentReadStrategy::DumpsysBatteryProperties,
-        CurrentReadStrategy::DumpsysBattery,
-        CurrentReadStrategy::MiChargeLogcat,
-        CurrentReadStrategy::DumpsysBatterystats,
-    ] {
-        if let Some(value) = query_current_with_strategy(device, strategy) {
-            return Ok(Some((strategy, value)));
-        }
+    let strategy = CurrentReadStrategy::FixedSysfs;
+    if let Some(value) = query_current_with_strategy(device, strategy) {
+        return Ok(Some((strategy, value)));
     }
     Ok(None)
 }
@@ -622,13 +547,6 @@ fn detect_power_strategy(
 ) -> Result<Option<(PowerReadStrategy, PowerSnapshot)>, CoreError> {
     for strategy in [
         PowerReadStrategy::FixedSysfs,
-        PowerReadStrategy::GlobSysfs,
-        PowerReadStrategy::PowerSupplyScan,
-        PowerReadStrategy::Uevent,
-        PowerReadStrategy::BatteryPropertiesMixed,
-        PowerReadStrategy::BatteryMixed,
-        PowerReadStrategy::MiChargeLogcat,
-        PowerReadStrategy::BatteryStatsMixed,
     ] {
         let snapshot = query_power_with_strategy(device, strategy);
         if snapshot.power_mw.is_some() {
@@ -661,34 +579,6 @@ fn query_power_with_strategy(
         PowerReadStrategy::FixedSysfs => (
             query_voltage_with_strategy(device, VoltageReadStrategy::FixedSysfs),
             query_current_with_strategy(device, CurrentReadStrategy::FixedSysfs),
-        ),
-        PowerReadStrategy::GlobSysfs => (
-            query_voltage_with_strategy(device, VoltageReadStrategy::GlobSysfs),
-            query_current_with_strategy(device, CurrentReadStrategy::GlobSysfs),
-        ),
-        PowerReadStrategy::PowerSupplyScan => (
-            query_voltage_with_strategy(device, VoltageReadStrategy::PowerSupplyScan),
-            query_current_with_strategy(device, CurrentReadStrategy::PowerSupplyScan),
-        ),
-        PowerReadStrategy::Uevent => (
-            query_voltage_with_strategy(device, VoltageReadStrategy::Uevent),
-            query_current_with_strategy(device, CurrentReadStrategy::Uevent),
-        ),
-        PowerReadStrategy::BatteryPropertiesMixed => (
-            query_voltage_with_strategy(device, VoltageReadStrategy::DumpsysBattery),
-            query_current_with_strategy(device, CurrentReadStrategy::DumpsysBatteryProperties),
-        ),
-        PowerReadStrategy::BatteryMixed => (
-            query_voltage_with_strategy(device, VoltageReadStrategy::DumpsysBattery),
-            query_current_with_strategy(device, CurrentReadStrategy::DumpsysBattery),
-        ),
-        PowerReadStrategy::MiChargeLogcat => (
-            query_voltage_with_strategy(device, VoltageReadStrategy::MiChargeLogcat),
-            query_current_with_strategy(device, CurrentReadStrategy::MiChargeLogcat),
-        ),
-        PowerReadStrategy::BatteryStatsMixed => (
-            query_voltage_with_strategy(device, VoltageReadStrategy::DumpsysBattery),
-            query_current_with_strategy(device, CurrentReadStrategy::DumpsysBatterystats),
         ),
         PowerReadStrategy::Hybrid { voltage, current } => (
             query_voltage_with_strategy(device, voltage),
@@ -736,25 +626,6 @@ fn query_current_with_strategy(
         CurrentReadStrategy::FixedSysfs => {
             query_sysfs_value(device, &CURRENT_PATHS, normalize_current_ma)
         }
-        CurrentReadStrategy::GlobSysfs => {
-            query_sysfs_glob_value(device, &CURRENT_GLOB_PATTERNS, normalize_current_ma)
-        }
-        CurrentReadStrategy::PowerSupplyScan => query_power_supply_scan_snapshot(device).current_ma,
-        CurrentReadStrategy::Uevent => {
-            query_uevent_value(device, &UEVENT_CURRENT_KEYS, normalize_current_ma)
-        }
-        CurrentReadStrategy::DumpsysBatteryProperties => {
-            run_shell(device, BATTERY_PROPERTIES_DUMP_COMMAND)
-                .ok()
-                .and_then(|text| parse_dumpsys_current_ma(&text))
-        }
-        CurrentReadStrategy::DumpsysBattery => run_shell(device, BATTERY_DUMP_COMMAND)
-            .ok()
-            .and_then(|text| parse_dumpsys_current_ma(&text)),
-        CurrentReadStrategy::MiChargeLogcat => query_micharge_snapshot(device).current_ma,
-        CurrentReadStrategy::DumpsysBatterystats => run_shell(device, BATTERYSTATS_DUMP_COMMAND)
-            .ok()
-            .and_then(|text| parse_batterystats_current_ma(&text)),
     }
 }
 
@@ -889,14 +760,6 @@ fn parse_dumpsys_voltage_mv(output: &str) -> Option<i64> {
     })
 }
 
-fn parse_dumpsys_current_ma(output: &str) -> Option<i64> {
-    parse_labeled_value(output, &CURRENT_DUMPSYS_LABELS, normalize_current_ma)
-}
-
-fn parse_batterystats_current_ma(output: &str) -> Option<i64> {
-    parse_labeled_value(output, &CURRENT_DUMPSYS_LABELS, normalize_current_ma)
-}
-
 fn parse_micharge_snapshot(output: &str) -> PowerSnapshot {
     let voltage_mv = parse_micharge_method_value(output, 11, normalize_voltage_mv);
     let current_ma = parse_micharge_method_value(output, 6, normalize_current_ma);
@@ -944,24 +807,6 @@ fn parse_keyed_value(
         keys.iter().find_map(|key| {
             let raw = trimmed.strip_prefix(key)?.strip_prefix('=')?.trim();
             normalize(raw.parse::<i64>().ok()?)
-        })
-    })
-}
-
-fn parse_labeled_value(
-    output: &str,
-    labels: &[&str],
-    normalize: fn(i64) -> Option<i64>,
-) -> Option<i64> {
-    output.lines().find_map(|line| {
-        let trimmed = line.trim();
-        let lowered = trimmed.to_ascii_lowercase();
-        labels.iter().find_map(|label| {
-            let normalized_label = label.to_ascii_lowercase();
-            let raw = lowered.strip_prefix(&normalized_label)?;
-            let start = trimmed.len().saturating_sub(raw.len());
-            let token = trimmed[start..].trim().split_whitespace().next()?;
-            normalize(token.parse::<i64>().ok()?)
         })
     })
 }
@@ -1134,8 +979,8 @@ mod tests {
     use super::{
         PowerSnapshot, best_current_from_power_supply_entries,
         best_voltage_from_power_supply_entries, normalize_current_ma, normalize_voltage_mv,
-        parse_batterystats_current_ma, parse_dumpsys_current_ma, parse_dumpsys_voltage_mv,
-        parse_keyed_value, parse_micharge_line, parse_micharge_snapshot, parse_power_supply_scan,
+        parse_dumpsys_voltage_mv, parse_keyed_value, parse_micharge_line,
+        parse_micharge_snapshot, parse_power_supply_scan,
     };
 
     #[test]
@@ -1160,14 +1005,6 @@ Current Battery Service state:
   voltage: 4312
   temperature: 298";
         assert_eq!(parse_dumpsys_voltage_mv(output), Some(4312));
-    }
-
-    #[test]
-    fn parses_current_from_dumpsys_output() {
-        let output = "\
-batteryCurrentNow: -512000
-current average: -498000";
-        assert_eq!(parse_dumpsys_current_ma(output), Some(512));
     }
 
     #[test]
@@ -1199,12 +1036,6 @@ status=Discharging";
         assert_eq!(entries.len(), 2);
         assert_eq!(best_current_from_power_supply_entries(&entries), Some(623));
         assert_eq!(best_voltage_from_power_supply_entries(&entries), Some(4312));
-    }
-
-    #[test]
-    fn batterystats_without_explicit_current_label_is_ignored() {
-        let output = "History start: current_now=-711000 something";
-        assert_eq!(parse_batterystats_current_ma(output), None);
     }
 
     #[test]

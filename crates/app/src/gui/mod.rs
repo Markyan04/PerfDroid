@@ -23,7 +23,9 @@ use pdcore::types::ControlCommand;
 
 use crate::aggregation::AggregatorEvent;
 use crate::device::{AdbDetectedDevice, DeviceDescriptor};
-use crate::export::export_session_to_csv;
+use crate::export::{
+    export_session_to_csv, export_session_to_html, export_session_to_json, export_session_to_png,
+};
 use crate::runtime::PerfDroidRuntime;
 use crate::session::SessionState;
 use crate::storage::{SessionStore, TimestampedBatch};
@@ -812,7 +814,7 @@ impl PerfDroidDemo {
             .on_click(move |_, _, _| runtime.request_stop())
             .disabled(!can_stop);
 
-        let export_allowed = self.can_export_csv() && !self.is_busy;
+        let export_allowed = self.can_export() && !self.is_busy;
         let export_state = self.state;
         let export_hz = self.selected_hz;
         let export_session = self.session.clone();
@@ -861,6 +863,161 @@ impl PerfDroidDemo {
                             )),
                             Err(err) => {
                                 export_runtime.request_status(format!("CSV export failed: {err}"))
+                            }
+                        }
+                    })
+                    .detach();
+            })
+            .disabled(!export_allowed);
+        let export_state = self.state;
+        let export_hz = self.selected_hz;
+        let export_session = self.session.clone();
+        let export_runtime = Arc::clone(&self.runtime);
+        let export_json = Button::new("export-json")
+            .label("Export JSON")
+            .on_click(move |_, _, cx| {
+                if !matches!(export_state, SessionState::Paused | SessionState::Stopped) {
+                    export_runtime
+                        .request_status("JSON export is only available in Paused or Stopped state.");
+                    return;
+                }
+                let initial_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let receiver = cx.prompt_for_new_path(&initial_dir, Some("perfdroid_session.json"));
+                let export_runtime = Arc::clone(&export_runtime);
+                let export_session = export_session.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        let selected_path = match receiver.await {
+                            Ok(Ok(Some(path))) => path,
+                            Ok(Ok(None)) => {
+                                export_runtime.request_status("JSON export canceled.");
+                                return;
+                            }
+                            Ok(Err(err)) => {
+                                export_runtime.request_status(format!(
+                                    "failed to open save dialog for JSON export: {err}"
+                                ));
+                                return;
+                            }
+                            Err(err) => {
+                                export_runtime.request_status(format!(
+                                    "failed while waiting for JSON save dialog result: {err}"
+                                ));
+                                return;
+                            }
+                        };
+                        let output_path = ensure_extension(selected_path, "json");
+                        match export_session_to_json(&output_path, &export_session, export_hz) {
+                            Ok(rows) => export_runtime.request_status(format!(
+                                "JSON exported: {} row(s) -> {}",
+                                rows,
+                                output_path.display()
+                            )),
+                            Err(err) => {
+                                export_runtime.request_status(format!("JSON export failed: {err}"))
+                            }
+                        }
+                    })
+                    .detach();
+            })
+            .disabled(!export_allowed);
+        let export_state = self.state;
+        let export_hz = self.selected_hz;
+        let export_session = self.session.clone();
+        let export_runtime = Arc::clone(&self.runtime);
+        let export_html = Button::new("export-html")
+            .label("Export HTML")
+            .on_click(move |_, _, cx| {
+                if !matches!(export_state, SessionState::Paused | SessionState::Stopped) {
+                    export_runtime
+                        .request_status("HTML export is only available in Paused or Stopped state.");
+                    return;
+                }
+                let initial_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let receiver = cx.prompt_for_new_path(&initial_dir, Some("perfdroid_report.html"));
+                let export_runtime = Arc::clone(&export_runtime);
+                let export_session = export_session.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        let selected_path = match receiver.await {
+                            Ok(Ok(Some(path))) => path,
+                            Ok(Ok(None)) => {
+                                export_runtime.request_status("HTML export canceled.");
+                                return;
+                            }
+                            Ok(Err(err)) => {
+                                export_runtime.request_status(format!(
+                                    "failed to open save dialog for HTML export: {err}"
+                                ));
+                                return;
+                            }
+                            Err(err) => {
+                                export_runtime.request_status(format!(
+                                    "failed while waiting for HTML save dialog result: {err}"
+                                ));
+                                return;
+                            }
+                        };
+                        let output_path = ensure_extension(selected_path, "html");
+                        match export_session_to_html(&output_path, &export_session, export_hz) {
+                            Ok(rows) => export_runtime.request_status(format!(
+                                "HTML report exported: {} row(s) -> {}",
+                                rows,
+                                output_path.display()
+                            )),
+                            Err(err) => {
+                                export_runtime.request_status(format!("HTML export failed: {err}"))
+                            }
+                        }
+                    })
+                    .detach();
+            })
+            .disabled(!export_allowed);
+        let export_state = self.state;
+        let export_session = self.session.clone();
+        let export_runtime = Arc::clone(&self.runtime);
+        let export_png = Button::new("export-png")
+            .label("Export PNG")
+            .on_click(move |_, _, cx| {
+                if !matches!(export_state, SessionState::Paused | SessionState::Stopped) {
+                    export_runtime
+                        .request_status("PNG export is only available in Paused or Stopped state.");
+                    return;
+                }
+                let initial_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                let receiver = cx.prompt_for_new_path(&initial_dir, Some("perfdroid_report.png"));
+                let export_runtime = Arc::clone(&export_runtime);
+                let export_session = export_session.clone();
+                cx.background_executor()
+                    .spawn(async move {
+                        let selected_path = match receiver.await {
+                            Ok(Ok(Some(path))) => path,
+                            Ok(Ok(None)) => {
+                                export_runtime.request_status("PNG export canceled.");
+                                return;
+                            }
+                            Ok(Err(err)) => {
+                                export_runtime.request_status(format!(
+                                    "failed to open save dialog for PNG export: {err}"
+                                ));
+                                return;
+                            }
+                            Err(err) => {
+                                export_runtime.request_status(format!(
+                                    "failed while waiting for PNG save dialog result: {err}"
+                                ));
+                                return;
+                            }
+                        };
+                        let output_path = ensure_extension(selected_path, "png");
+                        match export_session_to_png(&output_path, &export_session) {
+                            Ok(rows) => export_runtime.request_status(format!(
+                                "PNG report exported: {} row(s) -> {}",
+                                rows,
+                                output_path.display()
+                            )),
+                            Err(err) => {
+                                export_runtime.request_status(format!("PNG export failed: {err}"))
                             }
                         }
                     })
@@ -950,15 +1107,18 @@ impl PerfDroidDemo {
                         .bg(rgb(0xFAF3E8))
                         .border_1()
                         .child(export_csv)
+                        .child(export_json)
+                        .child(export_html)
+                        .child(export_png)
                         .child(helper_text(
-                            "CSV export is only enabled when session state is Paused or Stopped.",
+                            "Export is only enabled when session state is Paused or Stopped.",
                         )),
                 ),
             panel_width,
         )
     }
 
-    fn can_export_csv(&self) -> bool {
+    fn can_export(&self) -> bool {
         matches!(self.state, SessionState::Paused | SessionState::Stopped)
     }
 
@@ -1360,14 +1520,18 @@ fn frame_scalar_value(frame: &TimestampedBatch) -> Option<f64> {
 }
 
 fn ensure_csv_extension(path: PathBuf) -> PathBuf {
+    ensure_extension(path, "csv")
+}
+
+fn ensure_extension(path: PathBuf, ext: &str) -> PathBuf {
     if path
         .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
+        .and_then(|current| current.to_str())
+        .is_some_and(|current| current.eq_ignore_ascii_case(ext))
     {
         path
     } else {
-        path.with_extension("csv")
+        path.with_extension(ext)
     }
 }
 
