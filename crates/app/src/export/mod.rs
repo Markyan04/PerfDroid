@@ -89,12 +89,18 @@ pub fn export_session_to_json(
 
     for (idx, row) in rows.iter().enumerate() {
         out.push_str("    {\n");
-        out.push_str(&format!("      \"time_s\": {:.precision$},\n", row.elapsed_s));
+        out.push_str(&format!(
+            "      \"time_s\": {:.precision$},\n",
+            row.elapsed_s
+        ));
         out.push_str(&format!(
             "      \"metric_key\": \"{}\",\n",
             json_escape(&row.metric_key)
         ));
-        out.push_str(&format!("      \"unit\": \"{}\",\n", json_escape(&row.unit)));
+        out.push_str(&format!(
+            "      \"unit\": \"{}\",\n",
+            json_escape(&row.unit)
+        ));
         out.push_str("      \"values\": [");
         for (value_idx, value) in row.values.iter().enumerate() {
             if value_idx > 0 {
@@ -125,17 +131,24 @@ pub fn export_session_to_html(
     ensure_parent_exists(path)?;
     let precision = time_precision_for_hz(sampling_hz);
 
-    let cpu_clock_rows = build_metric_rows(session.cpu_clock_frames(), 1.0);
-    let cpu_usage_rows = build_metric_rows(session.cpu_usage_frames(), 1.0);
-    let temp_rows = build_metric_rows(session.battery_temperature_frames(), 10.0);
-    let fps_rows = build_metric_rows(session.fps_frames(), 1.0);
-    let battery_rows = build_battery_power_rows(session);
+    let base_timestamp_ms = session.global_start_timestamp_ms().unwrap_or(0);
+    let cpu_clock_rows = build_metric_rows(session.cpu_clock_frames(), 1.0, base_timestamp_ms);
+    let cpu_usage_rows = build_metric_rows(session.cpu_usage_frames(), 1.0, base_timestamp_ms);
+    let temp_rows = build_metric_rows(
+        session.battery_temperature_frames(),
+        10.0,
+        base_timestamp_ms,
+    );
+    let fps_rows = build_metric_rows(session.fps_frames(), 1.0, base_timestamp_ms);
+    let battery_rows = build_battery_power_rows(session, base_timestamp_ms);
 
     let cpu_clock_lines = detect_line_count(session.latest_cpu_clock().map(|f| &f.batch.values));
     let cpu_usage_lines = detect_line_count(session.latest_cpu_usage().map(|f| &f.batch.values));
 
     let mut html = String::new();
-    html.push_str("<!doctype html><html><head><meta charset=\"utf-8\"><title>PerfDroid Report</title>");
+    html.push_str(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>PerfDroid Report</title>",
+    );
     html.push_str("<style>body{font-family:Arial,sans-serif;background:#F3EBDD;color:#222;padding:24px}h1{margin:0 0 6px}h2{margin:0 0 10px;text-align:center}.panel{background:#FFF9F1;border:1px solid #ddd;border-radius:12px;padding:16px;margin-bottom:16px}.cards{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-bottom:10px}.card{background:#F7EEE0;border:1px solid #ddd;border-radius:8px;padding:8px 12px;min-width:120px;text-align:center}.legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}.legend i{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:6px}table{width:100%;border-collapse:collapse;margin-top:10px;background:#fff}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;font-size:12px}.muted{color:#666}</style>");
     html.push_str("</head><body>");
     html.push_str("<h1>PerfDroid</h1>");
@@ -248,11 +261,16 @@ pub fn export_session_to_png(_path: &Path, _session: &SessionStore) -> Result<us
         return Ok(collect_frames(session).len());
     }
 
-    let cpu_clock_rows = build_metric_rows(session.cpu_clock_frames(), 1.0);
-    let cpu_usage_rows = build_metric_rows(session.cpu_usage_frames(), 1.0);
-    let temp_rows = build_metric_rows(session.battery_temperature_frames(), 10.0);
-    let fps_rows = build_metric_rows(session.fps_frames(), 1.0);
-    let battery_rows = build_battery_power_rows(session);
+    let base_timestamp_ms = session.global_start_timestamp_ms().unwrap_or(0);
+    let cpu_clock_rows = build_metric_rows(session.cpu_clock_frames(), 1.0, base_timestamp_ms);
+    let cpu_usage_rows = build_metric_rows(session.cpu_usage_frames(), 1.0, base_timestamp_ms);
+    let temp_rows = build_metric_rows(
+        session.battery_temperature_frames(),
+        10.0,
+        base_timestamp_ms,
+    );
+    let fps_rows = build_metric_rows(session.fps_frames(), 1.0, base_timestamp_ms);
+    let battery_rows = build_battery_power_rows(session, base_timestamp_ms);
 
     let cpu_clock_lines = detect_line_count(session.latest_cpu_clock().map(|f| &f.batch.values));
     let cpu_usage_lines = detect_line_count(session.latest_cpu_usage().map(|f| &f.batch.values));
@@ -297,8 +315,7 @@ pub fn export_session_to_png(_path: &Path, _session: &SessionStore) -> Result<us
     ));
     panels.push((
         "Battery Power Metrics".to_string(),
-        "Metrics: VOLTAGE / CURRENT / POWER | units: mV, mA, mW | collector: battery"
-            .to_string(),
+        "Metrics: VOLTAGE / CURRENT / POWER | units: mV, mA, mW | collector: battery".to_string(),
         battery_rows,
         vec![
             ("voltage (mV)".to_string(), "#2563EB"),
@@ -373,7 +390,12 @@ fn try_screenshot_html_to_png(path: &Path, session: &SessionStore) -> Result<(),
         .arg(&out);
     commands.push(c1);
 
-    for bin in ["chromium", "chromium-browser", "google-chrome", "microsoft-edge"] {
+    for bin in [
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "microsoft-edge",
+    ] {
         let mut c = Command::new(bin);
         c.arg("--headless")
             .arg("--disable-gpu")
@@ -757,14 +779,18 @@ fn detect_line_count(values: Option<&Vec<i64>>) -> usize {
         .unwrap_or(1)
 }
 
-fn build_metric_rows(frames: &[TimestampedBatch], scale: f64) -> Vec<PlotRow> {
-    let Some(first) = frames.first() else {
+fn build_metric_rows(
+    frames: &[TimestampedBatch],
+    scale: f64,
+    base_timestamp_ms: u64,
+) -> Vec<PlotRow> {
+    if frames.is_empty() {
         return Vec::new();
-    };
+    }
     frames
         .iter()
         .map(|frame| {
-            let time_s = (frame.timestamp_ms.saturating_sub(first.timestamp_ms)) as f64 / 1000.0;
+            let time_s = (frame.timestamp_ms.saturating_sub(base_timestamp_ms)) as f64 / 1000.0;
             let mut values = [0.0; 10];
             for (i, value) in frame.batch.values.iter().copied().enumerate().take(10) {
                 if value >= 0 {
@@ -776,7 +802,7 @@ fn build_metric_rows(frames: &[TimestampedBatch], scale: f64) -> Vec<PlotRow> {
         .collect()
 }
 
-fn build_battery_power_rows(session: &SessionStore) -> Vec<PlotRow> {
+fn build_battery_power_rows(session: &SessionStore, base_timestamp_ms: u64) -> Vec<PlotRow> {
     let voltage_frames = session.battery_voltage_frames();
     let current_frames = session.battery_current_frames();
     let power_frames = session.battery_power_frames();
@@ -787,13 +813,6 @@ fn build_battery_power_rows(session: &SessionStore) -> Vec<PlotRow> {
     if total_rows == 0 {
         return Vec::new();
     }
-    let first_timestamp_ms = voltage_frames
-        .first()
-        .or_else(|| current_frames.first())
-        .or_else(|| power_frames.first())
-        .map(|f| f.timestamp_ms)
-        .unwrap_or(0);
-
     (0..total_rows)
         .map(|idx| {
             let timestamp_ms = voltage_frames
@@ -801,13 +820,13 @@ fn build_battery_power_rows(session: &SessionStore) -> Vec<PlotRow> {
                 .or_else(|| current_frames.get(idx))
                 .or_else(|| power_frames.get(idx))
                 .map(|f| f.timestamp_ms)
-                .unwrap_or(first_timestamp_ms);
+                .unwrap_or(base_timestamp_ms);
             let mut values = [0.0; 10];
             values[0] = frame_scalar_value(voltage_frames.get(idx));
             values[1] = frame_scalar_value(current_frames.get(idx));
             values[2] = frame_scalar_value(power_frames.get(idx));
             PlotRow {
-                time_s: (timestamp_ms.saturating_sub(first_timestamp_ms)) as f64 / 1000.0,
+                time_s: (timestamp_ms.saturating_sub(base_timestamp_ms)) as f64 / 1000.0,
                 values,
             }
         })

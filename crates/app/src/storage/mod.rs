@@ -16,6 +16,7 @@ pub struct SessionStore {
     battery_voltage: Vec<TimestampedBatch>,
     battery_current: Vec<TimestampedBatch>,
     battery_power: Vec<TimestampedBatch>,
+    timeline_compaction_ms: u64,
 }
 
 #[cfg(test)]
@@ -71,10 +72,103 @@ mod tests {
         assert_eq!(store.latest_battery_current_value(), Some(512));
         assert_eq!(store.latest_battery_power_value(), Some(2212));
     }
+
+    #[test]
+    fn delete_range_compacts_timeline_for_all_metrics() {
+        let mut store = SessionStore::default();
+        for ts in [0_u64, 5_000, 10_000, 15_000, 20_000] {
+            store.push(TimestampedBatch {
+                timestamp_ms: ts,
+                batch: MetricBatch {
+                    metric_key: "CPU_CLOCK".to_string(),
+                    unit: "MHz".to_string(),
+                    values: vec![1000],
+                },
+            });
+            store.push(TimestampedBatch {
+                timestamp_ms: ts,
+                batch: MetricBatch {
+                    metric_key: "FPS".to_string(),
+                    unit: "FPS".to_string(),
+                    values: vec![60],
+                },
+            });
+        }
+
+        store.delete_range(5_000, 15_000);
+
+        let cpu_ts: Vec<u64> = store
+            .cpu_clock_frames()
+            .iter()
+            .map(|f| f.timestamp_ms)
+            .collect();
+        let fps_ts: Vec<u64> = store.fps_frames().iter().map(|f| f.timestamp_ms).collect();
+        assert_eq!(cpu_ts, vec![0, 10_000]);
+        assert_eq!(fps_ts, vec![0, 10_000]);
+    }
+
+    #[test]
+    fn delete_range_also_compacts_future_incoming_frames() {
+        let mut store = SessionStore::default();
+        for ts in [0_u64, 5_000, 10_000, 15_000, 20_000] {
+            store.push(TimestampedBatch {
+                timestamp_ms: ts,
+                batch: MetricBatch {
+                    metric_key: "CPU_CLOCK".to_string(),
+                    unit: "MHz".to_string(),
+                    values: vec![1000],
+                },
+            });
+        }
+
+        store.delete_range(5_000, 15_000);
+
+        store.push(TimestampedBatch {
+            timestamp_ms: 25_000,
+            batch: MetricBatch {
+                metric_key: "CPU_CLOCK".to_string(),
+                unit: "MHz".to_string(),
+                values: vec![1100],
+            },
+        });
+
+        let cpu_ts: Vec<u64> = store
+            .cpu_clock_frames()
+            .iter()
+            .map(|f| f.timestamp_ms)
+            .collect();
+        assert_eq!(cpu_ts, vec![0, 10_000, 15_000]);
+    }
+
+    #[test]
+    fn delete_single_point_compacts_by_sampling_step() {
+        let mut store = SessionStore::default();
+        for ts in [0_u64, 1_000, 2_000, 3_000] {
+            store.push(TimestampedBatch {
+                timestamp_ms: ts,
+                batch: MetricBatch {
+                    metric_key: "CPU_CLOCK".to_string(),
+                    unit: "MHz".to_string(),
+                    values: vec![1000],
+                },
+            });
+        }
+
+        store.delete_range(0, 0);
+        let cpu_ts: Vec<u64> = store
+            .cpu_clock_frames()
+            .iter()
+            .map(|f| f.timestamp_ms)
+            .collect();
+        assert_eq!(cpu_ts, vec![0, 1_000, 2_000]);
+    }
 }
 
 impl SessionStore {
-    pub fn push(&mut self, frame: TimestampedBatch) {
+    pub fn push(&mut self, mut frame: TimestampedBatch) {
+        frame.timestamp_ms = frame
+            .timestamp_ms
+            .saturating_sub(self.timeline_compaction_ms);
         match frame.batch.metric_key.as_str() {
             "CPU_CLOCK" => self.cpu_clock.push(frame),
             "CPU_USAGE" => self.cpu_usage.push(frame),
@@ -143,21 +237,36 @@ impl SessionStore {
         self.battery_power.last()
     }
 
+    pub fn global_start_timestamp_ms(&self) -> Option<u64> {
+        [
+            self.cpu_clock.first(),
+            self.cpu_usage.first(),
+            self.fps.first(),
+            self.battery_temperature.first(),
+            self.battery_voltage.first(),
+            self.battery_current.first(),
+            self.battery_power.first(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|f| f.timestamp_ms)
+        .min()
+    }
+
     pub fn delete_range(&mut self, start_ms: u64, end_ms: u64) {
-        self.cpu_clock
-            .retain(|frame| frame.timestamp_ms < start_ms || frame.timestamp_ms > end_ms);
-        self.cpu_usage
-            .retain(|frame| frame.timestamp_ms < start_ms || frame.timestamp_ms > end_ms);
-        self.fps
-            .retain(|frame| frame.timestamp_ms < start_ms || frame.timestamp_ms > end_ms);
-        self.battery_temperature
-            .retain(|frame| frame.timestamp_ms < start_ms || frame.timestamp_ms > end_ms);
-        self.battery_voltage
-            .retain(|frame| frame.timestamp_ms < start_ms || frame.timestamp_ms > end_ms);
-        self.battery_current
-            .retain(|frame| frame.timestamp_ms < start_ms || frame.timestamp_ms > end_ms);
-        self.battery_power
-            .retain(|frame| frame.timestamp_ms < start_ms || frame.timestamp_ms > end_ms);
+        let shift_ms = if start_ms == end_ms {
+            self.estimate_sampling_step_ms().unwrap_or(0)
+        } else {
+            end_ms.saturating_sub(start_ms)
+        };
+        delete_and_compact_frames(&mut self.cpu_clock, start_ms, end_ms, shift_ms);
+        delete_and_compact_frames(&mut self.cpu_usage, start_ms, end_ms, shift_ms);
+        delete_and_compact_frames(&mut self.fps, start_ms, end_ms, shift_ms);
+        delete_and_compact_frames(&mut self.battery_temperature, start_ms, end_ms, shift_ms);
+        delete_and_compact_frames(&mut self.battery_voltage, start_ms, end_ms, shift_ms);
+        delete_and_compact_frames(&mut self.battery_current, start_ms, end_ms, shift_ms);
+        delete_and_compact_frames(&mut self.battery_power, start_ms, end_ms, shift_ms);
+        self.timeline_compaction_ms = self.timeline_compaction_ms.saturating_add(shift_ms);
     }
 
     pub fn latest_values(&self) -> Vec<Option<i64>> {
@@ -222,5 +331,44 @@ impl SessionStore {
                 .copied()
                 .filter(|value| *value != INVALID_METRIC_VALUE)
         })
+    }
+
+    fn estimate_sampling_step_ms(&self) -> Option<u64> {
+        let mut timestamps = Vec::new();
+        timestamps.extend(self.cpu_clock.iter().map(|f| f.timestamp_ms));
+        timestamps.extend(self.cpu_usage.iter().map(|f| f.timestamp_ms));
+        timestamps.extend(self.fps.iter().map(|f| f.timestamp_ms));
+        timestamps.extend(self.battery_temperature.iter().map(|f| f.timestamp_ms));
+        timestamps.extend(self.battery_voltage.iter().map(|f| f.timestamp_ms));
+        timestamps.extend(self.battery_current.iter().map(|f| f.timestamp_ms));
+        timestamps.extend(self.battery_power.iter().map(|f| f.timestamp_ms));
+        timestamps.sort_unstable();
+        timestamps.dedup();
+        let mut min_delta: Option<u64> = None;
+        for pair in timestamps.windows(2) {
+            let delta = pair[1].saturating_sub(pair[0]);
+            if delta == 0 {
+                continue;
+            }
+            min_delta = Some(min_delta.map_or(delta, |curr| curr.min(delta)));
+        }
+        min_delta
+    }
+}
+
+fn delete_and_compact_frames(
+    frames: &mut Vec<TimestampedBatch>,
+    start_ms: u64,
+    end_ms: u64,
+    shift_ms: u64,
+) {
+    frames.retain(|frame| frame.timestamp_ms < start_ms || frame.timestamp_ms > end_ms);
+    if shift_ms == 0 {
+        return;
+    }
+    for frame in frames.iter_mut() {
+        if frame.timestamp_ms > end_ms {
+            frame.timestamp_ms = frame.timestamp_ms.saturating_sub(shift_ms);
+        }
     }
 }
