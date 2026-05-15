@@ -3,7 +3,7 @@ set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
 app_name := "perfdroid"
 app_crate := "app"
-version := "0.1.0"
+version := "1.0.0"
 
 default:
     just --list
@@ -28,7 +28,7 @@ clippy:
     cargo clippy --workspace --all-targets -- -D warnings
 
 run:
-    cargo run -p {{app_crate}}
+    cargo run -p {{ app_crate }}
 
 clean:
     cargo clean
@@ -46,12 +46,12 @@ clean-dist:
 
 # Package for Linux, includes adb/linux/adb in release
 package-linux: prepare-dist
-    ./scripts/package-linux.sh '{{app_name}}' '{{version}}' '{{app_crate}}'
+    ./scripts/package-linux.sh '{{ app_name }}' '{{ version }}' '{{ app_crate }}'
 
 # Package for macOS, includes adb/mac/adb in release
 package-macos: prepare-dist
-    ./scripts/package-macos.sh '{{app_name}}' '{{version}}' '{{app_crate}}'
+    ./scripts/package-macos.sh '{{ app_name }}' '{{ version }}' '{{ app_crate }}'
 
 # Package for Windows, includes adb/win binaries in release
 package-windows: prepare-dist
-    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File '.\scripts\package-windows.ps1' -AppName '{{app_name}}' -Version '{{version}}' -AppCrate '{{app_crate}}'
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File '.\scripts\package-windows.ps1' -AppName '{{ app_name }}' -Version '{{ version }}' -AppCrate '{{ app_crate }}'
