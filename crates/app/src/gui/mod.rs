@@ -1100,16 +1100,29 @@ impl PerfDroidDemo {
                     div()
                         .flex()
                         .flex_col()
-                        .items_center()
                         .gap_2()
                         .p_2()
                         .rounded_md()
                         .bg(rgb(0xFAF3E8))
                         .border_1()
-                        .child(export_csv)
-                        .child(export_json)
-                        .child(export_html)
-                        .child(export_png)
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .justify_center()
+                                .gap_2()
+                                .child(div().w(px(150.0)).child(export_csv))
+                                .child(div().w(px(150.0)).child(export_json)),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .justify_center()
+                                .gap_2()
+                                .child(div().w(px(150.0)).child(export_html))
+                                .child(div().w(px(150.0)).child(export_png)),
+                        )
                         .child(helper_text(
                             "Export is only enabled when session state is Paused or Stopped.",
                         )),
